@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GeminiGen API — AI电商图片生成平台</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+  .card-hover { transition: transform .2s, box-shadow .2s; }
+  .card-hover:hover { transform: translateY(-4px); box-shadow: 0 20px 40px rgba(0,0,0,.12); }
+</style>
+</head>
+<body class="bg-gray-50 font-sans">
+
+<!-- 导航 -->
+<nav class="bg-white shadow-sm sticky top-0 z-50">
+  <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-2">
+      <div class="w-8 h-8 gradient-bg rounded-lg flex items-center justify-center">
+        <span class="text-white font-bold text-sm">G</span>
+      </div>
+      <span class="font-bold text-xl text-gray-800">GeminiGen</span>
+    </div>
+    <div class="hidden md:flex items-center gap-8 text-gray-600">
+      <a href="#pricing" class="hover:text-purple-600 transition">定价</a>
+      <a href="#features" class="hover:text-purple-600 transition">功能</a>
+      <a href="/docs-page" class="hover:text-purple-600 transition">API文档</a>
+    </div>
+    <div class="flex gap-3">
+      <a href="/dashboard" class="text-purple-600 border border-purple-600 px-4 py-2 rounded-lg hover:bg-purple-50 transition text-sm font-medium">登录</a>
+      <a href="/dashboard" class="gradient-bg text-white px-4 py-2 rounded-lg hover:opacity-90 transition text-sm font-medium">注册</a>
+    </div>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="gradient-bg text-white py-24 px-6">
+  <div class="max-w-4xl mx-auto text-center">
+    <div class="inline-block bg-white/20 rounded-full px-4 py-1 text-sm mb-6">✨ AI 电商图片生成中转平台</div>
+    <h1 class="text-5xl font-extrabold mb-6 leading-tight">
+      把商品图变成<br><span class="text-yellow-300">专业仓库展示图</span>
+    </h1>
+    <p class="text-xl text-white/80 mb-10 max-w-2xl mx-auto">
+      上传商品图，AI 自动分类、选择场景、合成仓库风格电商图。
+      支持网页操作与 API 调用，按次付费，简单透明。
+    </p>
+    <div class="flex gap-4 justify-center flex-wrap">
+      <a href="/dashboard" class="bg-white text-purple-700 font-bold px-8 py-3 rounded-xl hover:shadow-lg transition text-lg">
+        免费注册
+      </a>
+      <a href="/docs-page" class="bg-white/10 border border-white/30 text-white font-bold px-8 py-3 rounded-xl hover:bg-white/20 transition text-lg">
+        查看 API 文档
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- 定价 -->
+<section id="pricing" class="py-20 px-6">
+  <div class="max-w-4xl mx-auto">
+    <div class="text-center mb-12">
+      <h2 class="text-3xl font-bold text-gray-800 mb-3">简单透明定价</h2>
+      <p class="text-gray-500">充值预付，余额永不过期，按次消耗</p>
+    </div>
+    <div class="grid md:grid-cols-2 gap-8 max-w-2xl mx-auto">
+      <!-- nano-banana-2 -->
+      <div class="bg-white rounded-2xl shadow-md p-8 card-hover border border-gray-100">
+        <div class="text-sm text-gray-500 mb-2 font-medium">标准版</div>
+        <div class="text-4xl font-extrabold text-gray-800 mb-1">¥0.05<span class="text-base font-normal text-gray-400"> / 张</span></div>
+        <div class="text-purple-600 font-semibold mb-6">nano-banana-2</div>
+        <ul class="space-y-3 text-gray-600 text-sm">
+          <li class="flex items-center gap-2"><span class="text-green-500">✓</span> AI 自动分类选场景</li>
+          <li class="flex items-center gap-2"><span class="text-green-500">✓</span> 仓库风格合成</li>
+          <li class="flex items-center gap-2"><span class="text-green-500">✓</span> PNG 格式输出</li>
+          <li class="flex items-center gap-2"><span class="text-green-500">✓</span> 支持 API 调用</li>
+        </ul>
+        <a href="/dashboard" class="block mt-8 text-center border-2 border-purple-600 text-purple-600 rounded-lg py-2 font-medium hover:bg-purple-50 transition">
+          立即使用
+        </a>
+      </div>
+      <!-- nano-banana-pro -->
+      <div class="bg-white rounded-2xl shadow-lg p-8 card-hover border-2 border-purple-500 relative">
+        <div class="absolute -top-3 left-1/2 -translate-x-1/2 bg-purple-600 text-white text-xs px-3 py-1 rounded-full font-medium">推荐</div>
+        <div class="text-sm text-gray-500 mb-2 font-medium">专业版</div>
+        <div class="text-4xl font-extrabold text-gray-800 mb-1">¥0.06<span class="text-base font-normal text-gray-400"> / 张</span></div>
+        <div class="text-purple-600 font-semibold mb-6">nano-banana-pro</div>
+        <ul class="space-y-3 text-gray-600 text-sm">
+          <li class="flex items-center gap-2"><span class="text-green-500">✓</span> 更高质量合成效果</li>
+          <li class="flex items-center gap-2"><span class="text-green-500">✓</span> AI 自动分类选场景</li>
+          <li class="flex items-center gap-2"><span class="text-green-500">✓</span> 仓库风格合成</li>
+          <li class="flex items-center gap-2"><span class="text-green-500">✓</span> 支持 API 调用</li>
+        </ul>
+        <a href="/dashboard" class="block mt-8 text-center gradient-bg text-white rounded-lg py-2 font-medium hover:opacity-90 transition">
+          立即使用
+        </a>
+      </div>
+    </div>
+    <p class="text-center text-gray-400 text-sm mt-8">充值满 ¥100 送 ¥10 · 满 ¥500 送 ¥80</p>
+  </div>
+</section>
+
+<!-- 功能特点 -->
+<section id="features" class="bg-white py-20 px-6">
+  <div class="max-w-5xl mx-auto">
+    <h2 class="text-3xl font-bold text-center text-gray-800 mb-12">平台特点</h2>
+    <div class="grid md:grid-cols-3 gap-8">
+      <div class="text-center">
+        <div class="w-14 h-14 gradient-bg rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <span class="text-2xl">🤖</span>
+        </div>
+        <h3 class="font-bold text-gray-800 mb-2">AI 自动分类</h3>
+        <p class="text-gray-500 text-sm">智谱 AI 自动识别商品类别，选择最合适的仓库场景图</p>
+      </div>
+      <div class="text-center">
+        <div class="w-14 h-14 gradient-bg rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <span class="text-2xl">⚡</span>
+        </div>
+        <h3 class="font-bold text-gray-800 mb-2">快速生成</h3>
+        <p class="text-gray-500 text-sm">5路并发处理，通常1-3分钟完成生成</p>
+      </div>
+      <div class="text-center">
+        <div class="w-14 h-14 gradient-bg rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <span class="text-2xl">🔌</span>
+        </div>
+        <h3 class="font-bold text-gray-800 mb-2">API 接入</h3>
+        <p class="text-gray-500 text-sm">标准 REST API，一行代码接入，支持异步轮询结果</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- API 快速上手 -->
+<section class="py-20 px-6 bg-gray-900">
+  <div class="max-w-3xl mx-auto">
+    <h2 class="text-3xl font-bold text-center text-white mb-4">5分钟接入 API</h2>
+    <p class="text-center text-gray-400 mb-10">三步完成集成</p>
+    <div class="bg-gray-800 rounded-2xl p-6 text-green-400 font-mono text-sm overflow-x-auto leading-7">
+      <div class="text-gray-500 mb-2"># 1. 提交生成任务</div>
+      <div>curl -X POST https://your-domain/v1/generate \</div>
+      <div>&nbsp;&nbsp;-H "Authorization: Bearer sk-xxxx" \</div>
+      <div>&nbsp;&nbsp;-H "Content-Type: application/json" \</div>
+      <div>&nbsp;&nbsp;-d '{"product_image_url": "https://...", "model": "nano-banana-2"}'</div>
+      <br>
+      <div class="text-gray-500"># 返回 task_id</div>
+      <div>{"task_id": "abc-123", "status": "pending", ...}</div>
+      <br>
+      <div class="text-gray-500"># 2. 轮询结果</div>
+      <div>curl https://your-domain/v1/tasks/abc-123 \</div>
+      <div>&nbsp;&nbsp;-H "Authorization: Bearer sk-xxxx"</div>
+      <br>
+      <div class="text-gray-500"># 3. 获取结果图</div>
+      <div>{"status": "success", "result_image_url": "https://..."}</div>
+    </div>
+    <div class="text-center mt-8">
+      <a href="/docs-page" class="gradient-bg text-white px-8 py-3 rounded-xl font-medium hover:opacity-90 transition inline-block">查看完整文档</a>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="bg-gray-900 text-gray-400 py-10 px-6 border-t border-gray-800">
+  <div class="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+    <div class="flex items-center gap-2">
+      <div class="w-6 h-6 gradient-bg rounded flex items-center justify-center">
+        <span class="text-white font-bold text-xs">G</span>
+      </div>
+      <span class="font-semibold text-white">GeminiGen</span>
+    </div>
+    <div class="flex gap-6 text-sm">
+      <a href="/docs-page" class="hover:text-white transition">API 文档</a>
+      <a href="#pricing" class="hover:text-white transition">定价</a>
+      <a href="/dashboard" class="hover:text-white transition">控制台</a>
+    </div>
+    <div class="text-xs">© 2025 GeminiGen. All rights reserved.</div>
+  </div>
+</footer>
+
+</body>
+</html>
