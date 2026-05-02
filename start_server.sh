@@ -49,9 +49,9 @@ echo ""
 
 # 使用 nohup 后台运行，或前台运行
 if [ "$1" = "--daemon" ]; then
-    nohup python3 -m platform.main > server.log 2>&1 &
+    nohup python3 -m app.main > server.log 2>&1 &
     echo "[INFO] 已在后台启动，PID=$!"
     echo "[INFO] 日志: tail -f server.log"
 else
-    python3 -m platform.main
+    python3 -m app.main
 fi
