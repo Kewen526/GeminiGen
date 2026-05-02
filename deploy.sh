@@ -45,14 +45,29 @@ else
         || error "Python 安装失败，请手动安装"
 fi
 
-PYTHON=$(command -v python3.11 || command -v python3.10 || command -v python3)
-PIP="$PYTHON -m pip"
-success "使用 Python: $PYTHON"
+BASE_PYTHON=$(command -v python3.11 || command -v python3.10 || command -v python3)
+success "使用 Python: $BASE_PYTHON"
 
 # ============================================================
-# 2. 安装 pip 依赖
+# 2. 创建/更新 virtualenv，隔离依赖不污染系统环境
 # ============================================================
-info "安装依赖包..."
+info "安装系统工具..."
+yum install -y git curl mysql 2>/dev/null || apt-get install -y git curl mysql-client 2>/dev/null || true
+
+VENV_DIR="${SCRIPT_DIR}/.venv"
+info "配置虚拟环境 (${VENV_DIR})..."
+if [ ! -f "${VENV_DIR}/bin/activate" ]; then
+    $BASE_PYTHON -m venv "$VENV_DIR" || error "创建 venv 失败，请检查 python3-venv 是否已安装"
+    success "虚拟环境已创建"
+else
+    success "虚拟环境已存在，跳过创建"
+fi
+
+# 后续全部用 venv 内的 Python/pip
+PYTHON="${VENV_DIR}/bin/python"
+PIP="${VENV_DIR}/bin/pip"
+
+info "安装 Python 依赖包（可能需要1-2分钟）..."
 $PIP install --quiet --upgrade pip
 $PIP install --quiet -r requirements_platform.txt
 success "依赖安装完成"
@@ -63,8 +78,8 @@ success "依赖安装完成"
 if [ -f ".env" ]; then
     warn ".env 已存在，跳过生成（如需重置请删除 .env 后重新运行）"
 else
-    info "生成 .env 配置文件..."
-    SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+    info "生成 .env 配置..."
+    SECRET_KEY=$($PYTHON -c "import secrets; print(secrets.token_hex(32))")
     cat > .env <<EOF
 # GeminiGen API Server 配置（自动生成）
 SECRET_KEY=${SECRET_KEY}
@@ -95,7 +110,6 @@ if command -v mysql &>/dev/null; then
         && success "数据库表初始化完成" \
         || warn "数据库初始化失败，请手动执行: mysql < schema.sql"
 else
-    # 用 Python 执行 schema.sql
     $PYTHON - <<'PYEOF'
 import pymysql, re, sys
 
@@ -103,7 +117,6 @@ sql_file = "schema.sql"
 with open(sql_file, "r", encoding="utf-8") as f:
     content = f.read()
 
-# 去掉 USE 语句，直接连库操作
 content = re.sub(r'^\s*USE\s+\S+\s*;\s*$', '', content, flags=re.MULTILINE | re.IGNORECASE)
 
 conn = pymysql.connect(
@@ -128,7 +141,7 @@ PYEOF
 fi
 
 # ============================================================
-# 5. 创建 systemd 服务（自动开机启动 + 崩溃重启）
+# 5. 创建 systemd 服务（用 venv 内的 Python，彻底隔离依赖）
 # ============================================================
 info "配置 systemd 服务..."
 SERVICE_FILE="/etc/systemd/system/geminigen.service"
@@ -160,10 +173,9 @@ EOF
     if systemctl is-active --quiet geminigen; then
         success "systemd 服务已启动并设为开机自启"
     else
-        warn "systemd 启动失败，查看日志: journalctl -u geminigen -n 30"
+        warn "服务启动异常，查看详情: journalctl -u geminigen -n 50"
     fi
 else
-    # 没有 systemd 权限，用 nohup 启动
     warn "无 systemd 权限，使用 nohup 启动..."
     pkill -f "platform.main" 2>/dev/null || true
     nohup $PYTHON -m platform.main >> server.log 2>&1 &
@@ -192,24 +204,21 @@ fi
 # ============================================================
 # 完成
 # ============================================================
+SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_IP')
 echo ""
 echo "============================================================"
-echo -e "${GREEN}  部署完成！${NC}"
+echo -e "${GREEN}  ✅ 部署完成！${NC}"
 echo "============================================================"
 echo ""
-echo "  🌐 API 地址:   http://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_IP'):${PORT}"
-echo "  📋 API 文档:   http://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_IP'):${PORT}/api/docs"
-echo "  📁 日志文件:   ${SCRIPT_DIR}/server.log"
+echo "  🌐 网站首页:    http://${SERVER_IP}:${PORT}"
+echo "  📋 API 文档:    http://${SERVER_IP}:${PORT}/api/docs"
+echo "  🖥  控制台:     http://${SERVER_IP}:${PORT}/dashboard"
+echo "  📁 日志:        tail -f ${SCRIPT_DIR}/server.log"
 echo ""
-echo "  常用命令:"
-echo "  查看日志:  tail -f ${SCRIPT_DIR}/server.log"
-if [ -f "$SERVICE_FILE" ]; then
-echo "  重启服务:  systemctl restart geminigen"
-echo "  停止服务:  systemctl stop geminigen"
-echo "  服务状态:  systemctl status geminigen"
-fi
+echo "  服务管理:"
+echo "    systemctl status  geminigen"
+echo "    systemctl restart geminigen"
+echo "    systemctl stop    geminigen"
 echo ""
-echo "  本地 Worker 启动方式:"
-echo "  1. 修改 worker_standalone.py 顶部的账号配置"
-echo "  2. 双击 start_worker.bat（Windows）"
+echo "  下一步: 在本地电脑修改 worker_standalone.py 账号后双击 start_worker.bat"
 echo ""
