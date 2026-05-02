@@ -1,4 +1,4 @@
-# 平台依赖
+# 平台服务依赖（服务器端）
 fastapi>=0.115.2,<1.0
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
@@ -6,9 +6,5 @@ python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 pymysql>=1.1.0
 pydantic[email]>=2.9.0,<3.0
-
-# 原有依赖
-playwright
-requests
-qcloud-python-stu>=1.9.0
-aiohttp
+requests>=2.31.0
+aiohttp>=3.9.0
