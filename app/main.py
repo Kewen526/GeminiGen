@@ -96,4 +96,4 @@ def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run("platform.main:app", host=HOST, port=PORT, reload=False)
+    uvicorn.run("app.main:app", host=HOST, port=PORT, reload=False)
