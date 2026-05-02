@@ -55,10 +55,12 @@ class ApiKeyResponse(BaseModel):
 
 # ── 生成任务 ──────────────────────────────────────────────────
 class GenerateRequest(BaseModel):
-    product_image_url: str
     model: str = "nano-banana-2"
-    scene_image_url: Optional[str] = None
-    prompt: Optional[str] = None
+    prompt: str
+    reference_image_url: Optional[str] = None
+    aspect_ratio: str = "1:1"
+    output_format: str = "png"
+    resolution: str = "1K"
 
     @field_validator("model")
     @classmethod
@@ -68,11 +70,39 @@ class GenerateRequest(BaseModel):
             raise ValueError(f"model 只支持: {', '.join(allowed)}")
         return v
 
+    @field_validator("aspect_ratio")
+    @classmethod
+    def valid_ratio(cls, v):
+        allowed = {"1:1", "16:9", "9:16", "3:4", "4:3"}
+        if v not in allowed:
+            raise ValueError(f"aspect_ratio 只支持: {', '.join(allowed)}")
+        return v
+
+    @field_validator("output_format")
+    @classmethod
+    def valid_format(cls, v):
+        v = v.lower()
+        if v not in {"png", "jpeg"}:
+            raise ValueError("output_format 只支持 png / jpeg")
+        return v
+
+    @field_validator("resolution")
+    @classmethod
+    def valid_resolution(cls, v):
+        v = v.upper()
+        if v not in {"1K", "2K", "4K"}:
+            raise ValueError("resolution 只支持 1K / 2K / 4K")
+        return v
+
 
 class TaskResponse(BaseModel):
     task_id: str
     status: str           # pending | processing | success | failed
     model: str
+    prompt: Optional[str]
+    aspect_ratio: Optional[str]
+    output_format: Optional[str]
+    resolution: Optional[str]
     cost: Optional[float]
     result_image_url: Optional[str]
     error_msg: Optional[str]

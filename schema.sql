@@ -32,23 +32,43 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 -- 生成任务表
 CREATE TABLE IF NOT EXISTS gen_tasks (
-    id               BIGINT AUTO_INCREMENT PRIMARY KEY,
-    task_id          VARCHAR(64) NOT NULL UNIQUE,
-    user_id          BIGINT NOT NULL,
-    api_key_id       BIGINT,
-    model            VARCHAR(50) NOT NULL DEFAULT 'nano-banana-2',
-    product_image_url VARCHAR(1000),
-    scene_image_url  VARCHAR(1000),
-    prompt_text      TEXT,
-    result_image_url VARCHAR(1000),
-    status           VARCHAR(20) NOT NULL DEFAULT 'pending',
+    id                BIGINT AUTO_INCREMENT PRIMARY KEY,
+    task_id           VARCHAR(64) NOT NULL UNIQUE,
+    user_id           BIGINT NOT NULL,
+    api_key_id        BIGINT,
+    model             VARCHAR(50) NOT NULL DEFAULT 'nano-banana-2',
+    reference_image_url VARCHAR(1000),
+    prompt_text       TEXT,
+    aspect_ratio      VARCHAR(10) NOT NULL DEFAULT '1:1',
+    output_format     VARCHAR(10) NOT NULL DEFAULT 'png',
+    resolution        VARCHAR(10) NOT NULL DEFAULT '1K',
+    result_image_url  VARCHAR(1000),
+    status            VARCHAR(20) NOT NULL DEFAULT 'pending',
     -- pending | processing | success | failed
-    cost             DECIMAL(10, 4),
-    error_msg        VARCHAR(500),
-    created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    cost              DECIMAL(10, 4),
+    error_msg         VARCHAR(500),
+    created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES platform_users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Schema migration: add new columns to existing gen_tasks if needed
+DROP PROCEDURE IF EXISTS _migrate_gen_tasks;
+CREATE PROCEDURE _migrate_gen_tasks()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='gen_tasks' AND COLUMN_NAME='aspect_ratio'
+    ) THEN
+        ALTER TABLE gen_tasks
+            ADD COLUMN aspect_ratio VARCHAR(10) NOT NULL DEFAULT '1:1',
+            ADD COLUMN output_format VARCHAR(10) NOT NULL DEFAULT 'png',
+            ADD COLUMN resolution VARCHAR(10) NOT NULL DEFAULT '1K',
+            ADD COLUMN reference_image_url VARCHAR(1000);
+    END IF;
+END;
+CALL _migrate_gen_tasks();
+DROP PROCEDURE IF EXISTS _migrate_gen_tasks;
 
 -- 余额流水表
 CREATE TABLE IF NOT EXISTS balance_transactions (

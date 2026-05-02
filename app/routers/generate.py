@@ -22,6 +22,10 @@ def _task_to_response(row: dict) -> TaskResponse:
         task_id=row["task_id"],
         status=row["status"],
         model=row["model"],
+        prompt=row.get("prompt_text"),
+        aspect_ratio=row.get("aspect_ratio"),
+        output_format=row.get("output_format"),
+        resolution=row.get("resolution"),
         cost=float(row["cost"]) if row["cost"] else None,
         result_image_url=row.get("result_image_url"),
         error_msg=row.get("error_msg"),
@@ -42,16 +46,17 @@ def generate(req: GenerateRequest, current_user: dict = Depends(get_current_user
     task_id = db.create_task(
         user_id=current_user["id"],
         model=model,
-        product_image_url=req.product_image_url,
-        scene_image_url=req.scene_image_url or "",
-        prompt_text=req.prompt or "",
+        prompt_text=req.prompt,
         cost=cost,
+        aspect_ratio=req.aspect_ratio,
+        output_format=req.output_format,
+        resolution=req.resolution,
+        reference_image_url=req.reference_image_url or "",
         api_key_id=current_user.get("key_id"),
     )
 
     ok = db.deduct_balance(current_user["id"], cost, task_id, f"生成任务 {model}")
     if not ok:
-        # 余额刚好被并发请求消耗完
         db.fail_task(task_id, "余额不足", refund=False)
         raise HTTPException(status_code=402, detail="余额不足")
 
@@ -62,14 +67,22 @@ def generate(req: GenerateRequest, current_user: dict = Depends(get_current_user
 # ── 通过文件上传（网页使用）──────────────────────────────────
 @router.post("/generate/upload", response_model=TaskResponse)
 async def generate_upload(
-    product_image: UploadFile = File(...),
+    prompt: str = Form(...),
     model: str = Form(DEFAULT_MODEL),
-    scene_image: Optional[UploadFile] = File(None),
-    prompt: Optional[str] = Form(None),
+    aspect_ratio: str = Form("1:1"),
+    output_format: str = Form("png"),
+    resolution: str = Form("1K"),
+    reference_image: Optional[UploadFile] = File(None),
     current_user: dict = Depends(get_current_user),
 ):
     if model not in MODEL_PRICES:
         raise HTTPException(status_code=400, detail=f"不支持的模型: {model}")
+    if aspect_ratio not in {"1:1", "16:9", "9:16", "3:4", "4:3"}:
+        raise HTTPException(status_code=400, detail=f"不支持的纵横比: {aspect_ratio}")
+    if output_format.lower() not in {"png", "jpeg"}:
+        raise HTTPException(status_code=400, detail=f"不支持的格式: {output_format}")
+    if resolution.upper() not in {"1K", "2K", "4K"}:
+        raise HTTPException(status_code=400, detail=f"不支持的分辨率: {resolution}")
 
     cost = MODEL_PRICES[model]
     if current_user["balance"] < cost:
@@ -77,19 +90,19 @@ async def generate_upload(
 
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # 保存上传的商品图并获取可访问 URL
-    product_url = await save_upload_to_url(product_image, TEMP_DIR)
-    scene_url   = ""
-    if scene_image and scene_image.filename:
-        scene_url = await save_upload_to_url(scene_image, TEMP_DIR)
+    ref_url = ""
+    if reference_image and reference_image.filename:
+        ref_url = await save_upload_to_url(reference_image, TEMP_DIR)
 
     task_id = db.create_task(
         user_id=current_user["id"],
         model=model,
-        product_image_url=product_url,
-        scene_image_url=scene_url,
-        prompt_text=prompt or "",
+        prompt_text=prompt,
         cost=cost,
+        aspect_ratio=aspect_ratio,
+        output_format=output_format.lower(),
+        resolution=resolution.upper(),
+        reference_image_url=ref_url,
         api_key_id=current_user.get("key_id"),
     )
 
@@ -127,6 +140,10 @@ def list_tasks(
         {
             "task_id": r["task_id"],
             "model": r["model"],
+            "prompt": r.get("prompt_text"),
+            "aspect_ratio": r.get("aspect_ratio"),
+            "output_format": r.get("output_format"),
+            "resolution": r.get("resolution"),
             "status": r["status"],
             "cost": float(r["cost"]) if r["cost"] else None,
             "result_image_url": r.get("result_image_url"),

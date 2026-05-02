@@ -227,20 +227,22 @@ def get_transactions(user_id: int, limit: int = 50) -> list:
 # ============================================================
 # 生成任务
 # ============================================================
-def create_task(user_id: int, model: str, product_image_url: str,
-                scene_image_url: str, prompt_text: str,
-                cost: float, api_key_id: Optional[int] = None) -> str:
+def create_task(user_id: int, model: str, prompt_text: str,
+                cost: float, aspect_ratio: str = "1:1",
+                output_format: str = "png", resolution: str = "1K",
+                reference_image_url: str = "",
+                api_key_id: Optional[int] = None) -> str:
     task_id = str(uuid.uuid4())
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO gen_tasks "
-                "(task_id, user_id, api_key_id, model, product_image_url, "
-                " scene_image_url, prompt_text, cost, status) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')",
-                (task_id, user_id, api_key_id, model,
-                 product_image_url, scene_image_url, prompt_text, cost),
+                "(task_id, user_id, api_key_id, model, prompt_text, "
+                " aspect_ratio, output_format, resolution, reference_image_url, cost, status) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')",
+                (task_id, user_id, api_key_id, model, prompt_text,
+                 aspect_ratio, output_format, resolution, reference_image_url or "", cost),
             )
         conn.commit()
         return task_id
@@ -263,8 +265,8 @@ def get_user_tasks(user_id: int, limit: int = 20, offset: int = 0) -> list:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT task_id, model, status, cost, result_image_url, "
-                "       error_msg, created_at, updated_at "
+                "SELECT task_id, model, prompt_text, aspect_ratio, output_format, resolution, "
+                "       status, cost, result_image_url, error_msg, created_at, updated_at "
                 "FROM gen_tasks WHERE user_id = %s "
                 "ORDER BY created_at DESC LIMIT %s OFFSET %s",
                 (user_id, limit, offset),

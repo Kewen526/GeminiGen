@@ -44,7 +44,6 @@ WORKER_POLL_S = 5
 
 # ── 路径 ──────────────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCENE_ROOT = os.path.join(SCRIPT_DIR, "商家实拍图")
 TEMP_DIR   = os.path.join(SCRIPT_DIR, "platform_temp")
 
 # ── 服务地址 ──────────────────────────────────────────────────

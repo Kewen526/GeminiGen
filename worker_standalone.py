@@ -34,12 +34,10 @@ ACCOUNTS = [
 # ── 并发设置 ──────────────────────────────────────────────────
 WORKER_COUNT   = 3     # 每个账号启动几个 Worker 线程
 POLL_INTERVAL  = 5     # 无任务时等待秒数
-QUALITY_CHECK  = False # 是否开启质量检测（True 更稳定但每张多30s）
 
 # ── 本地路径 ──────────────────────────────────────────────────
 import os
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCENE_ROOT = os.path.join(SCRIPT_DIR, "商家实拍图")   # 仓库场景图目录
 TEMP_DIR   = os.path.join(SCRIPT_DIR, "worker_temp")  # 临时文件目录
 LOG_FILE   = os.path.join(SCRIPT_DIR, "worker.log")   # 日志文件
 
@@ -49,22 +47,16 @@ LOG_FILE   = os.path.join(SCRIPT_DIR, "worker.log")   # 日志文件
 
 import sys
 import time
-import random
 import logging
 import threading
 import traceback
 import urllib.request
-from pathlib import Path
 
 import pymysql
 import pymysql.cursors
 
-# 引入本目录的核心模块
 import gemini_gen
-from zhipu_classify import classify_image_sync
 from cos_upload import upload_to_cos
-if QUALITY_CHECK:
-    from score_checker import quality_check
 
 
 # ── 日志 ──────────────────────────────────────────────────────
@@ -78,36 +70,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
-
-# ── 分类 → 场景图文件夹映射 ───────────────────────────────────
-CATEGORY_FOLDER_MAP = {
-    "包":                  "包",
-    "保健穿戴":            "保健穿戴",
-    "电子":                "电子",
-    "发饰饰品":            "发饰饰品",
-    "服饰_裤子":           "服饰_裤子",
-    "服饰_连衣裙":         "服饰_连衣裙",
-    "服饰_上衣":           "服饰_上衣",
-    "挂件":                "挂件",
-    "化妆品":              "化妆品",
-    "家居":                "家居",
-    "戒指_项链_耳钉_手链": "戒指_项链_耳钉_手链",
-    "帽子":                "帽子",
-    "内衣":                "内衣",
-    "手机壳":              "手机壳",
-    "鞋子":                "鞋子",
-    "眼镜":                "眼镜",
-    "杂物":                "杂物",
-}
-
-PROMPT_UNIFIED = (
-    "图1（仓库参考图） + 图2（电商图）"
-    " → 提取图1的场景风格 → 提取图2的商品本体（多个商品只取一件）"
-    " →还原图2商品应该在货架刚拿下来的状态"
-    " → 按照该商品实际分类还原，去除所有电商拍摄效果"
-    "（例如商品内部液体、拼装效果、漂浮效果）"
-    "按图1的陈列方式展示图2的商品"
-)
 
 _stop_event = threading.Event()
 
@@ -236,35 +198,10 @@ def reset_stuck_tasks(timeout_minutes=30):
 # ============================================================
 # 工具函数
 # ============================================================
-def get_scene_photo(category):
-    folder = CATEGORY_FOLDER_MAP.get(category)
-    if not folder:
-        # 找不到分类就随机用一个
-        folder = random.choice(list(CATEGORY_FOLDER_MAP.values()))
-
-    folder_path = os.path.join(SCENE_ROOT, folder)
-    if not os.path.isdir(folder_path):
-        # fallback：遍历找第一个有图的文件夹
-        for f in CATEGORY_FOLDER_MAP.values():
-            p = os.path.join(SCENE_ROOT, f)
-            if os.path.isdir(p):
-                folder_path = p; break
-        else:
-            raise FileNotFoundError(f"场景图目录不存在: {SCENE_ROOT}")
-
-    exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-    imgs = [str(p) for p in Path(folder_path).iterdir()
-            if p.suffix.lower() in exts and p.is_file()]
-    if not imgs:
-        raise FileNotFoundError(f"场景图文件夹为空: {folder_path}")
-
-    chosen = random.choice(imgs)
-    logger.info(f"  场景图: {os.path.basename(chosen)} [{folder}]")
-    return chosen
-
-
 def download_image(url_or_path, save_path):
-    # 本地路径（服务器上传的临时文件，Worker 在同机器时直接复制）
+    """下载或复制图片到本地。URL 或本地路径均支持。"""
+    if not url_or_path:
+        return False
     if not url_or_path.startswith("http"):
         if os.path.exists(url_or_path):
             import shutil
@@ -282,14 +219,14 @@ def download_image(url_or_path, save_path):
             urllib.request.install_opener(opener)
             urllib.request.urlretrieve(url_or_path, save_path)
             size_kb = os.path.getsize(save_path) / 1024
-            logger.info(f"  ✅ 图片已下载 {size_kb:.0f}KB → {os.path.basename(save_path)}")
+            logger.info(f"  图片已下载 {size_kb:.0f}KB → {os.path.basename(save_path)}")
             return True
         except Exception as e:
             logger.warning(f"  下载第{attempt+1}次失败: {e}")
             if attempt < 2:
                 time.sleep(3)
 
-    logger.error(f"  ❌ 图片下载失败（3次）: {url_or_path[:80]}")
+    logger.error(f"  图片下载失败（3次）: {url_or_path[:80]}")
     return False
 
 
@@ -306,72 +243,46 @@ def cleanup(*paths):
 # 核心：处理单个任务
 # ============================================================
 def process_task(task, worker_id):
-    task_id   = task["task_id"]
-    model     = task["model"]
-    prod_url  = task["product_image_url"]
-    scene_url = task.get("scene_image_url") or ""
-    prompt    = task.get("prompt_text") or ""
+    task_id      = task["task_id"]
+    model        = task["model"]
+    prompt       = task.get("prompt_text") or ""
+    aspect_ratio = task.get("aspect_ratio") or "1:1"
+    output_format = task.get("output_format") or "png"
+    resolution   = task.get("resolution") or "1K"
+    ref_url      = task.get("reference_image_url") or ""
 
-    logger.info(f"▶ [W{worker_id}] 任务开始  task_id={task_id}  model={model}")
+    logger.info(
+        f"▶ [W{worker_id}] 任务开始  task_id={task_id}  model={model}"
+        f"  ratio={aspect_ratio}  fmt={output_format}  res={resolution}"
+    )
 
     os.makedirs(TEMP_DIR, exist_ok=True)
-    product_local   = os.path.join(TEMP_DIR, f"prod_{task_id}.jpg")
-    scene_local_tmp = os.path.join(TEMP_DIR, f"scene_{task_id}.jpg")
-    generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.png")
-    temp_files = [product_local, scene_local_tmp, generated_local]
+    ref_local       = os.path.join(TEMP_DIR, f"ref_{task_id}.jpg") if ref_url else None
+    generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.{output_format}")
+    temp_files = [p for p in [ref_local, generated_local] if p]
 
     try:
-        # 1. 下载商品图
-        logger.info(f"  [W{worker_id}] 下载商品图...")
-        if not download_image(prod_url, product_local):
-            fail_task(task_id, "商品图下载失败")
-            return
+        # 1. 下载参考图（如有）
+        if ref_url and ref_local:
+            logger.info(f"  [W{worker_id}] 下载参考图...")
+            if not download_image(ref_url, ref_local):
+                logger.warning("  参考图下载失败，将不使用参考图")
+                ref_local = None
 
-        # 2. 选场景图
-        if scene_url:
-            if download_image(scene_url, scene_local_tmp):
-                scene_local = scene_local_tmp
-            else:
-                logger.warning("  用户场景图下载失败，改用自动选择")
-                scene_local = None
-        else:
-            scene_local = None
-
-        if not scene_local:
-            logger.info(f"  [W{worker_id}] AI 分类中...")
-            try:
-                category = classify_image_sync(prod_url, "")
-                logger.info(f"  分类结果: {category}")
-            except Exception as e:
-                logger.warning(f"  分类失败({e})，使用杂物")
-                category = "杂物"
-            try:
-                scene_local = get_scene_photo(category)
-            except Exception as e:
-                fail_task(task_id, f"场景图获取失败: {e}")
-                cleanup(*temp_files)
-                return
-
-        # 3. 生成（最多 3 次）
+        # 2. 生成图片（最多 3 次）
         final_url   = None
         MAX_RETRIES = 3
 
         for attempt in range(1, MAX_RETRIES + 1):
             logger.info(f"  [W{worker_id}] 生成第 {attempt}/{MAX_RETRIES} 次...")
 
-            if attempt > 1:
-                # 重新选场景图
-                try:
-                    category = classify_image_sync(prod_url, "")
-                    scene_local = get_scene_photo(category)
-                except Exception:
-                    pass
-
             success, thumb_url, error_type = gemini_gen.run_task(
-                scene_photo=scene_local,
-                product_image=product_local,
                 save_path=generated_local,
-                prompt_text=prompt or PROMPT_UNIFIED,
+                prompt_text=prompt,
+                reference_image=ref_local,
+                aspect_ratio=aspect_ratio,
+                output_format=output_format,
+                resolution=resolution,
                 model=model,
             )
 
@@ -386,17 +297,6 @@ def process_task(task, worker_id):
                     time.sleep(20)
                 continue
 
-            # 4. 质量检测（可选）
-            if QUALITY_CHECK and thumb_url:
-                logger.info(f"  [W{worker_id}] 质量检测中...")
-                passed, reason = quality_check(scene_local, prod_url, thumb_url)
-                if not passed:
-                    logger.warning(f"  质量检测不合格: {reason}（第{attempt}次）")
-                    if attempt < MAX_RETRIES:
-                        time.sleep(10)
-                    continue
-                logger.info(f"  ✅ 质量检测合格")
-
             final_url = thumb_url
             break
 
@@ -405,15 +305,15 @@ def process_task(task, worker_id):
             cleanup(*temp_files)
             return
 
-        # 5. 上传结果
-        cos_key    = f"platform_results/{task_id}.png"
+        # 3. 上传结果到 COS
+        cos_key    = f"platform_results/{task_id}.{output_format}"
         result_url = upload_to_cos(generated_local, cos_key)
         if not result_url:
             result_url = final_url  # fallback：用 geminigen 直链
 
-        # 6. 回写成功
+        # 4. 回写成功
         finish_task(task_id, result_url)
-        logger.info(f"  ✅ [W{worker_id}] 任务完成！{result_url[:60]}")
+        logger.info(f"  ✅ [W{worker_id}] 任务完成！{result_url[:80]}")
 
     except Exception as e:
         logger.error(f"  ❌ [W{worker_id}] 任务异常 {task_id}: {e}")
@@ -446,11 +346,8 @@ def worker_loop(worker_id):
 # ============================================================
 def check_config():
     errors = []
-    if not ACCOUNTS or not ACCOUNTS[0].get("username"):
+    if not ACCOUNTS or not ACCOUNTS[0].get("username") or ACCOUNTS[0]["username"].startswith("your_"):
         errors.append("❌ 未填写 GeminiGen 账号（修改文件顶部的 ACCOUNTS 配置）")
-    if not os.path.isdir(SCENE_ROOT):
-        errors.append(f"❌ 场景图目录不存在: {SCENE_ROOT}")
-    # 验证数据库连接
     try:
         conn = _get_conn()
         conn.close()
@@ -466,11 +363,9 @@ def main():
     logger.info("=" * 60)
     logger.info("GeminiGen 平台 Worker 启动中...")
     logger.info(f"脚本目录: {SCRIPT_DIR}")
-    logger.info(f"场景图目录: {SCENE_ROOT}")
-    logger.info(f"并发数: {WORKER_COUNT}  质量检测: {QUALITY_CHECK}")
+    logger.info(f"并发数: {WORKER_COUNT}")
     logger.info("=" * 60)
 
-    # 启动前校验
     errors = check_config()
     if errors:
         for e in errors:
@@ -479,10 +374,8 @@ def main():
         input("\n按 Enter 键退出...")
         sys.exit(1)
 
-    # 重置卡住的任务
     reset_stuck_tasks(timeout_minutes=30)
 
-    # 初始化 GeminiGen（支持多账号，每账号独立浏览器）
     account = ACCOUNTS[0]
     logger.info(f"初始化账号: {account['username']}")
     gemini_gen.set_account(account["username"], account["password"], 0)
@@ -494,7 +387,6 @@ def main():
     logger.info(f"✅ 登录成功，启动 {WORKER_COUNT} 个 Worker 线程...")
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # 启动 Worker 线程
     threads = []
     for i in range(1, WORKER_COUNT + 1):
         t = threading.Thread(

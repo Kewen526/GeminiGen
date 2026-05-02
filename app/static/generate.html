@@ -3,354 +3,479 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>生成图片 — GeminiGen</title>
+<title>AI 生成图片 — GeminiGen</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-  .drop-zone { border: 2px dashed #d1d5db; transition: all .2s; }
-  .drop-zone.drag-over { border-color: #7c3aed; background: #f5f3ff; }
-  .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid rgba(255,255,255,.4); border-top-color: white; border-radius: 50%; animation: spin .8s linear infinite; }
+  .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+  .btn-primary:hover { opacity: 0.92; }
+  .card { background: #fff; border-radius: 1rem; box-shadow: 0 2px 12px rgba(0,0,0,.07); }
+  .option-btn {
+    border: 2px solid #e5e7eb; border-radius: .6rem; padding: .4rem .75rem;
+    cursor: pointer; font-size: .82rem; font-weight: 500;
+    transition: all .15s; color: #374151; background: #f9fafb;
+  }
+  .option-btn:hover { border-color: #7c3aed; color: #7c3aed; background: #f5f3ff; }
+  .option-btn.active { border-color: #7c3aed; color: #7c3aed; background: #ede9fe; }
+  .drop-zone {
+    border: 2px dashed #d1d5db; border-radius: .75rem;
+    transition: all .2s; min-height: 90px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    cursor: pointer; color: #6b7280; font-size: .85rem;
+  }
+  .drop-zone:hover, .drop-zone.drag-over { border-color: #7c3aed; background: #f5f3ff; color: #7c3aed; }
+  .spinner {
+    display: inline-block; width: 18px; height: 18px;
+    border: 2px solid rgba(255,255,255,.4); border-top-color: white;
+    border-radius: 50%; animation: spin .8s linear infinite;
+  }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: #7c3aed; animation: pulse 1.2s ease-in-out infinite; }
-  @keyframes pulse { 0%,100%{opacity:.3;transform:scale(.8)} 50%{opacity:1;transform:scale(1)} }
+  .tag-paid {
+    font-size: .65rem; background: #fef3c7; color: #92400e;
+    border: 1px solid #fcd34d; border-radius: 999px; padding: 1px 7px;
+    vertical-align: middle; font-weight: 600;
+  }
+  .result-img { border-radius: .75rem; width: 100%; object-fit: contain; max-height: 600px; }
+  .pulse-ring {
+    width: 60px; height: 60px; border-radius: 50%;
+    border: 3px solid #7c3aed; animation: pulse-ring 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse-ring {
+    0%,100% { transform: scale(.8); opacity:.5; }
+    50% { transform: scale(1.1); opacity:1; }
+  }
 </style>
 </head>
-<body class="bg-gray-50 font-sans min-h-screen">
+<body class="bg-gray-50 min-h-screen" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
 
 <!-- 导航 -->
-<nav class="bg-white shadow-sm px-6 py-4 flex items-center justify-between">
-  <div class="flex items-center gap-4">
+<nav class="bg-white border-b border-gray-100 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+  <div class="flex items-center gap-3">
     <a href="/" class="flex items-center gap-2">
       <div class="w-8 h-8 gradient-bg rounded-lg flex items-center justify-center">
         <span class="text-white font-bold text-sm">G</span>
       </div>
-      <span class="font-bold text-gray-800">GeminiGen</span>
+      <span class="font-bold text-gray-800 text-sm">GeminiGen</span>
     </a>
-    <span class="text-gray-300">/</span>
-    <span class="text-gray-600 text-sm">生成图片</span>
+    <span class="text-gray-300 text-xs">/</span>
+    <span class="text-gray-500 text-sm">AI 图片生成</span>
   </div>
   <div class="flex items-center gap-4">
-    <span class="text-sm text-gray-600">余额: <span id="balanceDisplay" class="font-bold text-purple-700">加载中...</span></span>
-    <a href="/dashboard" class="text-sm text-purple-600 hover:underline">控制台</a>
+    <div class="text-sm text-gray-600">
+      余额：<span id="balanceDisplay" class="font-bold text-purple-700">--</span>
+    </div>
+    <a href="/dashboard" class="text-sm text-purple-600 hover:text-purple-800 font-medium">控制台</a>
   </div>
 </nav>
 
 <!-- 未登录提示 -->
-<div id="loginPrompt" class="hidden max-w-lg mx-auto mt-20 bg-white rounded-2xl shadow-md p-10 text-center">
+<div id="loginPrompt" class="hidden max-w-md mx-auto mt-24 card p-10 text-center">
   <div class="text-5xl mb-4">🔐</div>
   <h2 class="text-xl font-bold text-gray-800 mb-2">请先登录</h2>
-  <p class="text-gray-500 mb-6">前往控制台登录或注册账号</p>
-  <a href="/dashboard" class="gradient-bg text-white px-8 py-3 rounded-xl font-medium hover:opacity-90 transition inline-block">去登录</a>
+  <p class="text-gray-500 mb-6 text-sm">登录后即可使用 AI 图片生成功能</p>
+  <a href="/dashboard" class="btn-primary text-white px-8 py-3 rounded-xl font-medium hover:opacity-90 transition inline-block">去登录</a>
 </div>
 
 <!-- 主内容 -->
-<div id="mainContent" class="hidden max-w-4xl mx-auto py-10 px-6">
-  <div class="grid md:grid-cols-2 gap-8">
+<div id="mainContent" class="hidden max-w-6xl mx-auto py-8 px-4 md:px-6">
+  <div class="grid lg:grid-cols-5 gap-6">
 
-    <!-- 左：输入区 -->
-    <div class="space-y-6">
-      <h1 class="text-2xl font-bold text-gray-800">AI 图片生成</h1>
+    <!-- 左列：输入区 (3/5) -->
+    <div class="lg:col-span-3 space-y-5">
 
-      <!-- 选模型 -->
-      <div class="bg-white rounded-2xl p-5 shadow-sm">
-        <label class="block text-sm font-semibold text-gray-700 mb-3">选择模型</label>
+      <!-- 模型选择 -->
+      <div class="card p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3">选择模型</h3>
         <div class="grid grid-cols-2 gap-3">
-          <label class="cursor-pointer">
-            <input type="radio" name="model" value="nano-banana-2" checked class="sr-only peer">
-            <div class="border-2 border-gray-200 rounded-xl p-3 peer-checked:border-purple-500 peer-checked:bg-purple-50 transition">
-              <div class="font-semibold text-gray-800 text-sm">nano-banana-2</div>
-              <div class="text-purple-600 font-bold">¥0.05</div>
-              <div class="text-xs text-gray-400">标准版</div>
+          <label class="model-card cursor-pointer">
+            <input type="radio" name="model" value="nano-banana-2" class="sr-only" checked>
+            <div class="border-2 border-purple-500 bg-purple-50 rounded-xl p-4 transition model-label">
+              <div class="flex items-start justify-between mb-1">
+                <span class="font-semibold text-gray-800 text-sm">Nano Banana 2</span>
+                <span class="tag-paid">付费</span>
+              </div>
+              <div class="text-xs text-gray-500">旗舰版 · 高精度</div>
+              <div class="mt-2 text-purple-700 font-bold text-sm">¥0.05 / 张</div>
             </div>
           </label>
-          <label class="cursor-pointer">
-            <input type="radio" name="model" value="nano-banana-pro" class="sr-only peer">
-            <div class="border-2 border-gray-200 rounded-xl p-3 peer-checked:border-purple-500 peer-checked:bg-purple-50 transition relative">
-              <div class="absolute -top-2 right-2 bg-purple-600 text-white text-xs px-2 rounded-full">推荐</div>
-              <div class="font-semibold text-gray-800 text-sm">nano-banana-pro</div>
-              <div class="text-purple-600 font-bold">¥0.06</div>
-              <div class="text-xs text-gray-400">专业版</div>
+          <label class="model-card cursor-pointer">
+            <input type="radio" name="model" value="nano-banana-pro" class="sr-only">
+            <div class="border-2 border-gray-200 bg-white rounded-xl p-4 transition model-label">
+              <div class="flex items-start justify-between mb-1">
+                <span class="font-semibold text-gray-800 text-sm">Nano Banana Pro</span>
+                <span class="tag-paid">付费</span>
+              </div>
+              <div class="text-xs text-gray-500">专业版 · 快速出图</div>
+              <div class="mt-2 text-purple-700 font-bold text-sm">¥0.06 / 张</div>
             </div>
           </label>
         </div>
       </div>
 
-      <!-- 商品图上传 -->
-      <div class="bg-white rounded-2xl p-5 shadow-sm">
-        <label class="block text-sm font-semibold text-gray-700 mb-3">商品图 <span class="text-red-500">*</span></label>
-        <div id="dropZone" class="drop-zone rounded-xl p-8 text-center cursor-pointer hover:border-purple-400 transition"
-             onclick="document.getElementById('fileInput').click()"
-             ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropFile(event)">
-          <div id="dropPlaceholder">
-            <div class="text-4xl mb-3">🖼️</div>
-            <div class="text-gray-500 text-sm">点击选择或拖拽图片</div>
-            <div class="text-gray-400 text-xs mt-1">支持 JPG / PNG / WEBP</div>
+      <!-- 提示词 -->
+      <div class="card p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-3">提示词</h3>
+        <textarea id="promptInput" rows="5" placeholder="描述你想要生成的图片内容，例如：一只橘猫坐在窗边晒太阳，柔和光线，写实风格..."
+          class="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm text-gray-800 resize-none focus:outline-none focus:border-purple-400 focus:ring-1 focus:ring-purple-100"
+        ></textarea>
+      </div>
+
+      <!-- 参考图 -->
+      <div class="card p-5">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold text-gray-700">参考图 <span class="text-gray-400 font-normal text-xs">（可选，最多 1 张）</span></h3>
+          <button id="clearRefBtn" class="hidden text-xs text-red-400 hover:text-red-600">✕ 移除</button>
+        </div>
+        <div id="dropZone" class="drop-zone gap-2">
+          <svg class="w-6 h-6 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+              d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+          <span>拖拽或点击上传参考图</span>
+          <input type="file" id="refFileInput" accept="image/*" class="hidden">
+        </div>
+        <div id="refPreviewWrap" class="hidden mt-3">
+          <img id="refPreview" alt="参考图预览" class="max-h-40 rounded-lg object-cover border border-gray-100">
+        </div>
+      </div>
+
+      <!-- 参数选项 -->
+      <div class="card p-5">
+        <h3 class="text-sm font-semibold text-gray-700 mb-4">生成参数</h3>
+
+        <!-- 纵横比 -->
+        <div class="mb-4">
+          <div class="text-xs text-gray-500 mb-2 font-medium">纵横比</div>
+          <div class="flex flex-wrap gap-2" id="ratioGroup">
+            <button class="option-btn active" data-value="1:1">1:1 正方形</button>
+            <button class="option-btn" data-value="16:9">16:9 横屏</button>
+            <button class="option-btn" data-value="9:16">9:16 竖屏</button>
+            <button class="option-btn" data-value="3:4">3:4 竖版</button>
+            <button class="option-btn" data-value="4:3">4:3 横版</button>
           </div>
-          <img id="previewImg" class="hidden mx-auto max-h-40 rounded-xl object-contain" alt="预览">
         </div>
-        <input type="file" id="fileInput" accept="image/*" class="hidden" onchange="onFileSelect(event)">
-      </div>
 
-      <!-- 或输入图片URL -->
-      <div class="bg-white rounded-2xl p-5 shadow-sm">
-        <label class="block text-sm font-semibold text-gray-700 mb-3">或输入商品图 URL</label>
-        <input type="url" id="imageUrl" placeholder="https://example.com/product.jpg"
-               class="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300">
-        <div class="text-xs text-gray-400 mt-1">上传文件或填写URL，两者选其一</div>
+        <!-- 输出格式 -->
+        <div class="mb-4">
+          <div class="text-xs text-gray-500 mb-2 font-medium">输出格式</div>
+          <div class="flex gap-2" id="formatGroup">
+            <button class="option-btn active" data-value="png">PNG</button>
+            <button class="option-btn" data-value="jpeg">JPEG</button>
+          </div>
+        </div>
+
+        <!-- 分辨率 -->
+        <div>
+          <div class="text-xs text-gray-500 mb-2 font-medium">分辨率</div>
+          <div class="flex gap-2" id="resolutionGroup">
+            <button class="option-btn active" data-value="1K">1K 标准</button>
+            <button class="option-btn" data-value="2K">2K 高清</button>
+            <button class="option-btn" data-value="4K">4K 超清</button>
+          </div>
+        </div>
       </div>
 
       <!-- 生成按钮 -->
-      <button id="generateBtn" onclick="startGenerate()"
-              class="w-full gradient-bg text-white py-3.5 rounded-xl font-bold text-base hover:opacity-90 transition flex items-center justify-center gap-2">
-        <span id="btnText">✨ 开始生成</span>
-        <span id="btnSpinner" class="spinner hidden"></span>
+      <button id="generateBtn"
+        class="btn-primary w-full text-white py-3.5 rounded-xl font-semibold text-base transition disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+        <span id="btnText">生成图片</span>
       </button>
-    </div>
 
-    <!-- 右：结果区 -->
-    <div class="space-y-6">
-      <h2 class="text-2xl font-bold text-gray-800">生成结果</h2>
+      <!-- 错误提示 -->
+      <div id="errorMsg" class="hidden bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm"></div>
 
-      <!-- 等待态 -->
-      <div id="statusCard" class="hidden bg-white rounded-2xl p-8 shadow-sm text-center">
-        <div class="flex items-center justify-center gap-2 mb-4">
-          <div class="pulse-dot"></div>
-          <div class="pulse-dot" style="animation-delay:.2s"></div>
-          <div class="pulse-dot" style="animation-delay:.4s"></div>
+    </div><!-- /left col -->
+
+    <!-- 右列：结果区 (2/5) -->
+    <div class="lg:col-span-2">
+      <div class="card p-5 sticky top-20">
+        <h3 class="text-sm font-semibold text-gray-700 mb-4">生成结果</h3>
+
+        <!-- 初始占位 -->
+        <div id="resultPlaceholder" class="flex flex-col items-center justify-center py-16 text-gray-400 gap-3">
+          <svg class="w-12 h-12 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1"
+              d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+          <span class="text-sm">图片将在此显示</span>
         </div>
-        <div id="statusText" class="text-gray-600 font-medium">任务已提交，等待处理...</div>
-        <div id="taskIdText" class="text-xs text-gray-400 mt-2 font-mono"></div>
-        <div class="mt-4 text-sm text-gray-400">通常 1-3 分钟完成</div>
-      </div>
 
-      <!-- 成功态 -->
-      <div id="successCard" class="hidden bg-white rounded-2xl p-6 shadow-sm">
-        <div class="text-green-600 font-semibold mb-3 flex items-center gap-2">
-          <span>✅</span> 生成成功
+        <!-- 生成中动画 -->
+        <div id="resultLoading" class="hidden flex flex-col items-center justify-center py-16 gap-5">
+          <div class="pulse-ring"></div>
+          <div class="text-sm text-gray-500 text-center">
+            <div class="font-medium text-purple-700">正在生成中...</div>
+            <div id="loadingHint" class="text-xs mt-1 text-gray-400">通常需要 30～120 秒</div>
+          </div>
+          <div id="elapsedTime" class="text-xs text-gray-400"></div>
         </div>
-        <img id="resultImg" class="w-full rounded-xl object-contain max-h-80" alt="生成结果">
-        <div class="flex gap-3 mt-4">
-          <a id="downloadBtn" href="#" download="geminigen_result.png" target="_blank"
-             class="flex-1 text-center border-2 border-purple-600 text-purple-600 rounded-xl py-2 text-sm font-medium hover:bg-purple-50 transition">
-            下载图片
-          </a>
-          <button onclick="resetForm()" class="flex-1 gradient-bg text-white rounded-xl py-2 text-sm font-medium hover:opacity-90 transition">
-            再次生成
+
+        <!-- 生成结果 -->
+        <div id="resultSuccess" class="hidden">
+          <img id="resultImg" alt="生成结果" class="result-img border border-gray-100 mb-4">
+          <div class="flex gap-2">
+            <a id="downloadBtn" href="#" download="geminigen_result.png" target="_blank"
+              class="flex-1 text-center btn-primary text-white py-2.5 rounded-lg text-sm font-medium transition">
+              下载图片
+            </a>
+            <button id="regenerateBtn"
+              class="flex-1 border border-purple-300 text-purple-700 py-2.5 rounded-lg text-sm font-medium hover:bg-purple-50 transition">
+              重新生成
+            </button>
+          </div>
+          <div id="taskInfo" class="mt-3 text-xs text-gray-400 space-y-0.5"></div>
+        </div>
+
+        <!-- 生成失败 -->
+        <div id="resultFailed" class="hidden flex flex-col items-center py-12 gap-3 text-center">
+          <div class="text-3xl">❌</div>
+          <div class="text-sm font-medium text-gray-700">生成失败</div>
+          <div id="failedMsg" class="text-xs text-gray-400 max-w-xs"></div>
+          <button id="retryBtn"
+            class="mt-2 border border-gray-300 text-gray-600 py-2 px-5 rounded-lg text-sm hover:bg-gray-50 transition">
+            重试
           </button>
         </div>
-      </div>
 
-      <!-- 失败态 -->
-      <div id="failCard" class="hidden bg-white rounded-2xl p-6 shadow-sm">
-        <div class="text-red-500 font-semibold mb-2 flex items-center gap-2"><span>❌</span> 生成失败</div>
-        <div id="failMsg" class="text-gray-600 text-sm"></div>
-        <div class="text-xs text-gray-400 mt-2">费用已退回账户</div>
-        <button onclick="resetForm()" class="mt-4 w-full border border-gray-200 rounded-xl py-2 text-sm hover:bg-gray-50 transition">重新尝试</button>
       </div>
+    </div><!-- /right col -->
 
-      <!-- 空态 -->
-      <div id="emptyCard" class="bg-white rounded-2xl p-10 shadow-sm text-center text-gray-400">
-        <div class="text-5xl mb-4">🎨</div>
-        <div>上传商品图后点击生成<br>AI 将自动选择场景合成仓库风格图</div>
-      </div>
-
-      <!-- 历史小记 -->
-      <div id="recentTasks" class="bg-white rounded-2xl p-5 shadow-sm">
-        <div class="font-semibold text-gray-700 mb-3 text-sm">最近任务</div>
-        <div id="recentList" class="space-y-2 text-sm text-gray-500">加载中...</div>
-      </div>
-    </div>
-
-  </div>
-</div>
+  </div><!-- /grid -->
+</div><!-- /mainContent -->
 
 <script>
-const API = '';
-let token = localStorage.getItem('gg_token');
+// ── State ─────────────────────────────────────────────────────
+let token = localStorage.getItem('geminigen_token') || '';
+let currentTaskId = null;
 let pollTimer = null;
+let elapsedTimer = null;
+let selectedRatio = '1:1';
+let selectedFormat = 'png';
+let selectedResolution = '1K';
+let selectedModel = 'nano-banana-2';
+let refFile = null;
 
-// ── 初始化 ────────────────────────────────────────────────────
-window.onload = async () => {
+// ── Init ──────────────────────────────────────────────────────
+(async () => {
   if (!token) {
     document.getElementById('loginPrompt').classList.remove('hidden');
     return;
   }
+  document.getElementById('mainContent').classList.remove('hidden');
+  await loadBalance();
+})();
+
+async function loadBalance() {
   try {
-    const user = await apiFetch('/auth/me');
-    document.getElementById('balanceDisplay').textContent = '¥' + user.balance.toFixed(4);
-    document.getElementById('mainContent').classList.remove('hidden');
-    loadRecentTasks();
-  } catch {
-    document.getElementById('loginPrompt').classList.remove('hidden');
-  }
-};
-
-// ── 拖拽 ──────────────────────────────────────────────────────
-function dragOver(e) { e.preventDefault(); document.getElementById('dropZone').classList.add('drag-over'); }
-function dragLeave(e) { document.getElementById('dropZone').classList.remove('drag-over'); }
-function dropFile(e) {
-  e.preventDefault();
-  document.getElementById('dropZone').classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file) setFile(file);
+    const r = await apiFetch('/v1/balance');
+    if (r.ok) {
+      const d = await r.json();
+      document.getElementById('balanceDisplay').textContent = '¥' + d.balance.toFixed(4);
+    }
+  } catch(e) {}
 }
 
-function onFileSelect(e) {
-  const file = e.target.files[0];
-  if (file) setFile(file);
-}
+// ── Model radio cards ─────────────────────────────────────────
+document.querySelectorAll('input[name="model"]').forEach(radio => {
+  radio.addEventListener('change', () => {
+    selectedModel = radio.value;
+    document.querySelectorAll('.model-label').forEach(el => {
+      el.classList.remove('border-purple-500', 'bg-purple-50');
+      el.classList.add('border-gray-200', 'bg-white');
+    });
+    const card = radio.closest('label').querySelector('.model-label');
+    card.classList.remove('border-gray-200', 'bg-white');
+    card.classList.add('border-purple-500', 'bg-purple-50');
+  });
+});
 
-function setFile(file) {
+// ── Option button groups ──────────────────────────────────────
+function setupGroup(groupId, setter) {
+  document.getElementById(groupId).querySelectorAll('.option-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById(groupId).querySelectorAll('.option-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      setter(btn.dataset.value);
+    });
+  });
+}
+setupGroup('ratioGroup', v => selectedRatio = v);
+setupGroup('formatGroup', v => selectedFormat = v);
+setupGroup('resolutionGroup', v => selectedResolution = v);
+
+// ── Reference image upload ────────────────────────────────────
+const dropZone = document.getElementById('dropZone');
+const refFileInput = document.getElementById('refFileInput');
+
+dropZone.addEventListener('click', () => refFileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) setRefFile(e.dataTransfer.files[0]);
+});
+refFileInput.addEventListener('change', () => {
+  if (refFileInput.files[0]) setRefFile(refFileInput.files[0]);
+});
+document.getElementById('clearRefBtn').addEventListener('click', () => {
+  refFile = null;
+  refFileInput.value = '';
+  document.getElementById('refPreviewWrap').classList.add('hidden');
+  document.getElementById('clearRefBtn').classList.add('hidden');
+});
+
+function setRefFile(file) {
+  if (!file.type.startsWith('image/')) { showError('请上传图片文件'); return; }
+  if (file.size > 10 * 1024 * 1024) { showError('图片大小不能超过 10MB'); return; }
+  refFile = file;
   const reader = new FileReader();
-  reader.onload = (e) => {
-    document.getElementById('dropPlaceholder').classList.add('hidden');
-    const img = document.getElementById('previewImg');
-    img.src = e.target.result;
-    img.classList.remove('hidden');
-    document.getElementById('imageUrl').value = '';
+  reader.onload = e => {
+    document.getElementById('refPreview').src = e.target.result;
+    document.getElementById('refPreviewWrap').classList.remove('hidden');
+    document.getElementById('clearRefBtn').classList.remove('hidden');
   };
   reader.readAsDataURL(file);
 }
 
-// ── 生成 ──────────────────────────────────────────────────────
+// ── Generate ──────────────────────────────────────────────────
+document.getElementById('generateBtn').addEventListener('click', startGenerate);
+document.getElementById('regenerateBtn').addEventListener('click', startGenerate);
+document.getElementById('retryBtn').addEventListener('click', startGenerate);
+
 async function startGenerate() {
-  const model = document.querySelector('input[name="model"]:checked').value;
-  const imageUrl = document.getElementById('imageUrl').value.trim();
-  const fileInput = document.getElementById('fileInput');
-  const hasFile = fileInput.files && fileInput.files[0];
+  const prompt = document.getElementById('promptInput').value.trim();
+  if (!prompt) { showError('请输入提示词'); return; }
 
-  if (!imageUrl && !hasFile) {
-    alert('请上传商品图或输入图片 URL');
-    return;
-  }
-
-  setBtnLoading(true);
-  showCard('status');
+  hideError();
+  setGenerating(true);
+  showPanel('loading');
+  startElapsedTimer();
 
   try {
-    let task;
-    if (hasFile) {
-      // 文件上传方式
-      const formData = new FormData();
-      formData.append('product_image', fileInput.files[0]);
-      formData.append('model', model);
-      const res = await fetch('/v1/generate/upload', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + token },
-        body: formData,
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || '提交失败');
-      }
-      task = await res.json();
-    } else {
-      // URL 方式
-      task = await apiFetch('/v1/generate', 'POST', {
-        product_image_url: imageUrl,
-        model,
-      });
+    const fd = new FormData();
+    fd.append('prompt', prompt);
+    fd.append('model', selectedModel);
+    fd.append('aspect_ratio', selectedRatio);
+    fd.append('output_format', selectedFormat);
+    fd.append('resolution', selectedResolution);
+    if (refFile) fd.append('reference_image', refFile);
+
+    const r = await apiFetch('/v1/generate/upload', { method: 'POST', body: fd });
+    const data = await r.json();
+
+    if (!r.ok) {
+      throw new Error(data.detail || '提交失败');
     }
 
-    document.getElementById('taskIdText').textContent = 'Task ID: ' + task.task_id;
-    document.getElementById('statusText').textContent = '任务已提交，等待处理...';
-    setBtnLoading(false);
-    startPolling(task.task_id);
-
-  } catch (e) {
-    setBtnLoading(false);
-    showCard('fail');
-    document.getElementById('failMsg').textContent = e.message;
+    currentTaskId = data.task_id;
+    pollTask(currentTaskId);
+  } catch(e) {
+    stopElapsedTimer();
+    setGenerating(false);
+    showPanel('placeholder');
+    showError(e.message || '提交失败，请重试');
   }
 }
 
-function startPolling(taskId) {
-  let attempts = 0;
+function pollTask(taskId) {
+  if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
-    attempts++;
     try {
-      const task = await apiFetch('/v1/tasks/' + taskId);
-      if (task.status === 'processing') {
-        document.getElementById('statusText').textContent = `处理中... (${attempts * 5}s)`;
-      } else if (task.status === 'success') {
+      const r = await apiFetch(`/v1/tasks/${taskId}`);
+      if (!r.ok) return;
+      const task = await r.json();
+
+      if (task.status === 'success') {
         clearInterval(pollTimer);
-        showCard('success');
-        document.getElementById('resultImg').src = task.result_image_url;
-        document.getElementById('downloadBtn').href = task.result_image_url;
-        // 更新余额
-        try {
-          const user = await apiFetch('/auth/me');
-          document.getElementById('balanceDisplay').textContent = '¥' + user.balance.toFixed(4);
-        } catch {}
-        loadRecentTasks();
+        stopElapsedTimer();
+        setGenerating(false);
+        showSuccess(task);
+        loadBalance();
       } else if (task.status === 'failed') {
         clearInterval(pollTimer);
-        showCard('fail');
-        document.getElementById('failMsg').textContent = task.error_msg || '生成失败';
+        stopElapsedTimer();
+        setGenerating(false);
+        showFailed(task.error_msg || '生成失败');
       }
-      if (attempts > 120) {  // 10分钟超时
-        clearInterval(pollTimer);
-        showCard('fail');
-        document.getElementById('failMsg').textContent = '等待超时，请刷新页面查看任务状态';
-      }
-    } catch {}
-  }, 5000);
+    } catch(e) {}
+  }, 4000);
 }
 
-function showCard(name) {
-  ['status','success','fail','empty'].forEach(c => {
-    document.getElementById(c + 'Card').classList.toggle('hidden', c !== name);
+// ── UI helpers ────────────────────────────────────────────────
+function showPanel(name) {
+  ['placeholder', 'loading', 'success', 'failed'].forEach(n => {
+    document.getElementById('result' + n.charAt(0).toUpperCase() + n.slice(1)).classList.add('hidden');
   });
+  const el = document.getElementById('result' + name.charAt(0).toUpperCase() + name.slice(1));
+  if (el) el.classList.remove('hidden');
 }
 
-function setBtnLoading(loading) {
-  document.getElementById('generateBtn').disabled = loading;
-  document.getElementById('btnSpinner').classList.toggle('hidden', !loading);
-  document.getElementById('btnText').textContent = loading ? '生成中...' : '✨ 开始生成';
+function showSuccess(task) {
+  showPanel('success');
+  const img = document.getElementById('resultImg');
+  img.src = task.result_image_url;
+  document.getElementById('downloadBtn').href = task.result_image_url;
+  document.getElementById('downloadBtn').download = `geminigen_${task.task_id}.${task.output_format || 'png'}`;
+  const info = [
+    task.model, task.aspect_ratio, (task.output_format || '').toUpperCase(), task.resolution,
+    task.cost ? `¥${Number(task.cost).toFixed(4)}` : ''
+  ].filter(Boolean).join(' · ');
+  document.getElementById('taskInfo').textContent = info;
 }
 
-function resetForm() {
-  if (pollTimer) clearInterval(pollTimer);
-  document.getElementById('fileInput').value = '';
-  document.getElementById('previewImg').classList.add('hidden');
-  document.getElementById('dropPlaceholder').classList.remove('hidden');
-  document.getElementById('imageUrl').value = '';
-  showCard('empty');
-  setBtnLoading(false);
+function showFailed(msg) {
+  showPanel('failed');
+  document.getElementById('failedMsg').textContent = msg;
 }
 
-// ── 最近任务 ──────────────────────────────────────────────────
-async function loadRecentTasks() {
-  try {
-    const tasks = await apiFetch('/v1/tasks?limit=5');
-    const el = document.getElementById('recentList');
-    if (!tasks.length) { el.innerHTML = '<div class="text-gray-400">暂无记录</div>'; return; }
-    const statusMap = { pending:'⏳', processing:'🔄', success:'✅', failed:'❌' };
-    el.innerHTML = tasks.map(t => `
-      <div class="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">
-        <div class="flex items-center gap-2">
-          <span>${statusMap[t.status]||'?'}</span>
-          <span class="font-mono text-xs text-gray-400">${t.task_id.substring(0,8)}</span>
-          <span class="text-gray-600">${t.model}</span>
-        </div>
-        <div>${t.result_image_url ? `<a href="${t.result_image_url}" target="_blank" class="text-purple-500 hover:underline text-xs">查看</a>` : ''}</div>
-      </div>
-    `).join('');
-  } catch {
-    document.getElementById('recentList').innerHTML = '<div class="text-gray-400">加载失败</div>';
+function setGenerating(state) {
+  const btn = document.getElementById('generateBtn');
+  const txt = document.getElementById('btnText');
+  if (state) {
+    btn.disabled = true;
+    txt.innerHTML = '<span class="spinner"></span> 生成中...';
+  } else {
+    btn.disabled = false;
+    txt.textContent = '生成图片';
   }
 }
 
-// ── API Helper ────────────────────────────────────────────────
-async function apiFetch(path, method = 'GET', body = null) {
-  const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
-  const res = await fetch(API + path, {
-    method, headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
-  return data;
+let _elapsedSec = 0;
+function startElapsedTimer() {
+  _elapsedSec = 0;
+  stopElapsedTimer();
+  elapsedTimer = setInterval(() => {
+    _elapsedSec++;
+    document.getElementById('elapsedTime').textContent = `已等待 ${_elapsedSec} 秒`;
+    if (_elapsedSec > 60) {
+      document.getElementById('loadingHint').textContent = '高分辨率生成可能需要更长时间，请耐心等待';
+    }
+  }, 1000);
+}
+
+function stopElapsedTimer() {
+  if (elapsedTimer) { clearInterval(elapsedTimer); elapsedTimer = null; }
+  document.getElementById('elapsedTime').textContent = '';
+}
+
+function showError(msg) {
+  const el = document.getElementById('errorMsg');
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+function hideError() {
+  document.getElementById('errorMsg').classList.add('hidden');
+}
+
+// ── API helper ────────────────────────────────────────────────
+function apiFetch(url, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  // Don't set Content-Type for FormData (browser sets with boundary)
+  if (!(opts.body instanceof FormData)) {
+    headers['Content-Type'] = headers['Content-Type'] || 'application/json';
+  }
+  return fetch(url, { ...opts, headers });
 }
 </script>
 </body>
