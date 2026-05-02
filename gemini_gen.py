@@ -908,7 +908,8 @@ def _solve_turnstile():
 # ============================================================
 # API 提交
 # ============================================================
-def _api_generate(token, gid, scene_photo, product_image, turnstile_token, prompt_text):
+def _api_generate(token, gid, scene_photo, product_image, turnstile_token, prompt_text,
+                  model="nano-banana-2"):
     url     = f"{API_BASE}/generate_image"
     headers = _build_headers(token, gid)
     ratio   = random.choice(["3:4", "4:3"])
@@ -916,7 +917,7 @@ def _api_generate(token, gid, scene_photo, product_image, turnstile_token, promp
 
     fields = [
         ("prompt",          (None, prompt_text)),
-        ("model",           (None, "nano-banana-2")),
+        ("model",           (None, model)),
         ("aspect_ratio",    (None, ratio)),
         ("output_format",   (None, "png")),
         ("resolution",      (None, "1K")),
@@ -1094,7 +1095,7 @@ def _download_image(url, save_path):
 # ============================================================
 # 对外主接口
 # ============================================================
-def run_task(scene_photo, product_image, save_path, prompt_text):
+def run_task(scene_photo, product_image, save_path, prompt_text, model="nano-banana-2"):
     MAX_SUBMIT_RETRY = 10
     QUEUE_FULL_WAIT  = 30
     try:
@@ -1123,7 +1124,7 @@ def run_task(scene_photo, product_image, save_path, prompt_text):
             logger.info("▷ API 提交...")
             try:
                 status_code, task_uuid, submit_error = _api_generate(
-                    token, gid, scene_photo, product_image, turnstile_token, prompt_text
+                    token, gid, scene_photo, product_image, turnstile_token, prompt_text, model
                 )
             except Exception as e:
                 if _is_network_error(e):
@@ -1157,7 +1158,7 @@ def run_task(scene_photo, product_image, save_path, prompt_text):
                 except: continue
                 try:
                     status_code, task_uuid, submit_error = _api_generate(
-                        token, gid, scene_photo, product_image, turnstile_token, prompt_text
+                        token, gid, scene_photo, product_image, turnstile_token, prompt_text, model
                     )
                 except Exception as e:
                     if _is_network_error(e):
