@@ -55,24 +55,54 @@ info "安装系统工具..."
 yum install -y git curl mysql 2>/dev/null || apt-get install -y git curl mysql-client 2>/dev/null || true
 
 VENV_DIR="${SCRIPT_DIR}/.venv"
+
+# ── 坑①：旧 venv 可能由系统默认的 Python 3.6 创建，3.6 不满足依赖要求
+# 若 venv 内的 Python 主版本 < 3.8，直接删除重建
+if [ -f "${VENV_DIR}/bin/python" ]; then
+    VENV_PY_MINOR=$("${VENV_DIR}/bin/python" -c "import sys; print(sys.version_info.minor)" 2>/dev/null || echo 0)
+    VENV_PY_MAJOR=$("${VENV_DIR}/bin/python" -c "import sys; print(sys.version_info.major)" 2>/dev/null || echo 0)
+    if [ "$VENV_PY_MAJOR" -lt 3 ] || [ "$VENV_PY_MINOR" -lt 8 ]; then
+        warn "venv Python ${VENV_PY_MAJOR}.${VENV_PY_MINOR} 太旧（需 3.8+），删除并用 ${BASE_PYTHON} 重建..."
+        rm -rf "$VENV_DIR"
+    fi
+fi
+
 info "配置虚拟环境 (${VENV_DIR})..."
 if [ ! -f "${VENV_DIR}/bin/activate" ]; then
     $BASE_PYTHON -m venv "$VENV_DIR" || error "创建 venv 失败，请检查 python3-venv 是否已安装"
-    success "虚拟环境已创建"
+    success "虚拟环境已创建 ($(${VENV_DIR}/bin/python --version))"
 else
-    success "虚拟环境已存在，跳过创建"
+    success "虚拟环境已存在 ($(${VENV_DIR}/bin/python --version))，跳过创建"
 fi
 
 # 后续全部用 venv 内的 Python/pip
 PYTHON="${VENV_DIR}/bin/python"
 PIP="${VENV_DIR}/bin/pip"
 
-info "安装 Python 依赖包（可能需要1-2分钟）..."
-$PIP install --quiet --upgrade pip
-# 先安装关键依赖，确保 API 可启动
-$PIP install --quiet fastapi uvicorn[standard] python-multipart python-jose[cryptography] passlib[bcrypt] "bcrypt<5" pymysql pydantic[email] email-validator dnspython requests cos-python-sdk-v5
-# 再安装完整依赖（某些可选包在部分镜像源可能不存在，不阻塞核心服务）
-$PIP install --quiet -r requirements_platform.txt || warn "部分可选依赖安装失败，核心 API 仍可运行"
+# ── 坑②：在中国大陆服务器上，PyPI 官方源下载不稳定，改用阿里云镜像
+PIP_MIRROR="https://mirrors.aliyun.com/pypi/simple/"
+PIP_OPTS="-i ${PIP_MIRROR} --trusted-host mirrors.aliyun.com"
+
+info "安装 Python 依赖包（使用阿里云镜像，约 1-2 分钟）..."
+$PIP install --quiet --upgrade pip $PIP_OPTS
+
+# ── 坑③：fastapi 0.136+ / pydantic 2.13+ 组合存在 BaseModel 导入异常，
+#    固定到已验证稳定的版本区间
+$PIP install --quiet $PIP_OPTS \
+    "fastapi>=0.115.2,<0.120" \
+    "uvicorn[standard]>=0.29.0" \
+    "python-multipart>=0.0.9" \
+    "python-jose[cryptography]>=3.3.0" \
+    "passlib[bcrypt]>=1.7.4" \
+    "bcrypt<5" \
+    "pymysql>=1.1.0" \
+    "pydantic[email]>=2.9.0,<2.12" \
+    "requests" \
+    "aiohttp" \
+    "cos-python-sdk-v5>=1.9.0"
+
+# 再装完整 requirements（某些可选包不影响核心服务）
+$PIP install --quiet $PIP_OPTS -r requirements_platform.txt || warn "部分可选依赖安装失败，核心 API 仍可运行"
 success "依赖安装完成"
 
 # ============================================================
@@ -180,8 +210,10 @@ EOF
     fi
 else
     warn "无 systemd 权限，使用 nohup 启动..."
-    pkill -f "platform.main" 2>/dev/null || true
-    nohup $PYTHON -m platform.main >> server.log 2>&1 &
+    # ── 坑④：不能用 `python -m platform.main`，本地 platform/ 包会遮蔽
+    #    stdlib 的 platform 模块导致 pydantic 启动失败，改用 run_api.py
+    pkill -f "run_api.py" 2>/dev/null || true
+    nohup $PYTHON "${SCRIPT_DIR}/run_api.py" >> server.log 2>&1 &
     SERVER_PID=$!
     sleep 3
     if kill -0 $SERVER_PID 2>/dev/null; then
