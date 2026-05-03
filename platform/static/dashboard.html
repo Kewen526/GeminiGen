@@ -6,12 +6,20 @@
 <title>控制台 — GeminiGen</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
-  .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-  .sidebar-item { @apply flex items-center gap-3 px-4 py-3 rounded-xl text-gray-600 hover:bg-purple-50 hover:text-purple-700 cursor-pointer transition text-sm font-medium; }
-  .sidebar-item.active { @apply bg-purple-100 text-purple-700; }
+  body {
+    background:
+      radial-gradient(1000px 520px at 0% -10%, rgba(99, 102, 241, .12), transparent 65%),
+      radial-gradient(800px 420px at 100% 0%, rgba(168, 85, 247, .1), transparent 60%),
+      #f6f8ff;
+  }
+  .gradient-bg { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%); }
+  .panel { background: rgba(255,255,255,.84); border: 1px solid rgba(255,255,255,.85); backdrop-filter: blur(12px); box-shadow: 0 8px 30px rgba(15, 23, 42, .06); }
+  .sidebar-item { display:flex; align-items:center; gap:.75rem; padding:.75rem 1rem; border-radius:.9rem; color:#4b5563; cursor:pointer; transition:all .2s; font-size:.875rem; font-weight:600; }
+  .sidebar-item:hover { background:#f3e8ff; color:#6d28d9; }
+  .sidebar-item.active { background:#ede9fe; color:#6d28d9; }
 </style>
 </head>
-<body class="bg-gray-100 font-sans">
+<body class="font-sans text-gray-800">
 
 <!-- 登录弹窗（未登录时显示）-->
 <div id="authModal" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -52,7 +60,7 @@
 <!-- 主界面 -->
 <div id="mainApp" class="hidden">
   <!-- 顶部栏 -->
-  <header class="bg-white shadow-sm px-6 py-4 flex items-center justify-between">
+  <header class="panel px-6 py-4 flex items-center justify-between sticky top-0 z-40">
     <div class="flex items-center gap-2">
       <div class="w-8 h-8 gradient-bg rounded-lg flex items-center justify-center">
         <span class="text-white font-bold text-sm">G</span>
@@ -67,7 +75,7 @@
 
   <div class="flex">
     <!-- 侧边栏 -->
-    <aside class="w-56 bg-white h-screen shadow-sm p-4 flex flex-col gap-1 sticky top-16">
+    <aside class="w-56 panel h-screen p-4 flex flex-col gap-1 sticky top-16 rounded-r-2xl">
       <div onclick="showSection('overview')" class="sidebar-item active" id="nav-overview">📊 概览</div>
       <a href="/generate" class="sidebar-item">🎨 生成图片</a>
       <div onclick="showSection('tasks')" class="sidebar-item" id="nav-tasks">📋 任务记录</div>
@@ -82,23 +90,23 @@
       <div id="section-overview">
         <h1 class="text-2xl font-bold text-gray-800 mb-6">控制台概览</h1>
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div class="bg-white rounded-2xl p-6 shadow-sm">
+          <div class="panel rounded-2xl p-6">
             <div class="text-gray-500 text-sm mb-1">账户余额</div>
             <div id="balanceDisplay" class="text-3xl font-extrabold text-purple-700">¥0.00</div>
             <div class="text-xs text-gray-400 mt-1">按次扣费，失败自动退款</div>
           </div>
-          <div class="bg-white rounded-2xl p-6 shadow-sm">
+          <div class="panel rounded-2xl p-6">
             <div class="text-gray-500 text-sm mb-1">累计任务</div>
             <div id="totalTasksDisplay" class="text-3xl font-extrabold text-gray-800">0</div>
             <div class="text-xs text-gray-400 mt-1">生成成功的任务数</div>
           </div>
-          <div class="bg-white rounded-2xl p-6 shadow-sm">
+          <div class="panel rounded-2xl p-6">
             <div class="text-gray-500 text-sm mb-1">账号邮箱</div>
             <div id="emailDisplay" class="text-sm font-medium text-gray-800 truncate">—</div>
             <div class="text-xs text-gray-400 mt-1">注册邮箱</div>
           </div>
         </div>
-        <div class="bg-white rounded-2xl p-6 shadow-sm">
+        <div class="panel rounded-2xl p-6">
           <h3 class="font-bold text-gray-700 mb-4">充值说明</h3>
           <p class="text-sm text-gray-500 mb-3">如需充值，请联系管理员或扫码转账后提供充值金额与账号邮箱。</p>
           <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -123,7 +131,7 @@
       <!-- 任务记录 -->
       <div id="section-tasks" class="hidden">
         <h1 class="text-2xl font-bold text-gray-800 mb-6">任务记录</h1>
-        <div class="bg-white rounded-2xl shadow-sm overflow-hidden">
+        <div class="panel rounded-2xl overflow-hidden">
           <table class="w-full text-sm">
             <thead class="bg-gray-50 text-gray-500">
               <tr>
@@ -156,7 +164,7 @@
       <!-- 流水记录 -->
       <div id="section-transactions" class="hidden">
         <h1 class="text-2xl font-bold text-gray-800 mb-6">流水记录</h1>
-        <div class="bg-white rounded-2xl shadow-sm overflow-hidden">
+        <div class="panel rounded-2xl overflow-hidden">
           <table class="w-full text-sm">
             <thead class="bg-gray-50 text-gray-500">
               <tr>

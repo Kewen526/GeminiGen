@@ -21,7 +21,7 @@ DB_CONFIG = {
     "port":            int(os.getenv("DB_PORT", "3306")),
     "user":            os.getenv("DB_USER", "root"),
     "password":        os.getenv("DB_PASSWORD", "root@kunkun"),
-    "database":        os.getenv("DB_NAME", "quote_iw"),
+    "database":        os.getenv("DB_NAME", "geminigen_platform"),
     "charset":         "utf8mb4",
     "connect_timeout": 10,
 }
