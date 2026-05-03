@@ -17,12 +17,10 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# 引用上层目录的核心模块
 _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _BASE)
 
 import gemini_gen
-from zhipu_classify import classify_image_sync
 from cos_upload import upload_to_cos
 
 from .config import (
@@ -32,61 +30,34 @@ from .config import (
 )
 from . import database as db
 
-# ── 提示词（与 main_loop.py 一致）────────────────────────────
 PROMPT_UNIFIED = (
-    "图1（仓库参考图） + 图2（电商图）"
-    " → 提取图1的场景风格 → 提取图2的商品本体（多个商品只取一件）"
-    " →还原图2商品应该在货架刚拿下来的状态"
-    " → 按照该商品实际分类还原，去除所有电商拍摄效果"
-    "（例如商品内部液体、拼装效果、漂浮效果）"
-    "按图1的陈列方式展示图2的商品"
+    "图1（参考图） + 图2（主体图）"
+    " → 提取图1的场景风格 → 提取图2的主体内容"
+    " → 按照图1的风格和构图方式展示图2的主体"
 )
-
-CATEGORY_FOLDER_MAP = {
-    "包":                  "包",
-    "保健穿戴":            "保健穿戴",
-    "电子":                "电子",
-    "发饰饰品":            "发饰饰品",
-    "服饰_裤子":           "服饰_裤子",
-    "服饰_连衣裙":         "服饰_连衣裙",
-    "服饰_上衣":           "服饰_上衣",
-    "挂件":                "挂件",
-    "化妆品":              "化妆品",
-    "家居":                "家居",
-    "戒指_项链_耳钉_手链": "戒指_项链_耳钉_手链",
-    "帽子":                "帽子",
-    "内衣":                "内衣",
-    "手机壳":              "手机壳",
-    "鞋子":                "鞋子",
-    "眼镜":                "眼镜",
-    "杂物":                "杂物",
-}
 
 _stop_event = threading.Event()
 
 
-# ── 工具函数 ──────────────────────────────────────────────────
-def _get_scene_photo(category: str) -> str:
-    folder = CATEGORY_FOLDER_MAP.get(category, "杂物")
-    path   = os.path.join(SCENE_ROOT, folder)
-    if not os.path.isdir(path):
-        # fallback：随机取任意分类
-        for f in CATEGORY_FOLDER_MAP.values():
-            p = os.path.join(SCENE_ROOT, f)
-            if os.path.isdir(p):
-                path = p; break
-
+# ── 随机选取场景图（不依赖分类）────────────────────────────
+def _get_random_scene_photo() -> str:
+    """从 SCENE_ROOT 下所有子目录中随机取一张图片"""
     exts = {".jpg", ".jpeg", ".png", ".webp"}
-    imgs = [str(p) for p in Path(path).iterdir()
-            if p.suffix.lower() in exts and p.is_file()]
-    if not imgs:
-        raise FileNotFoundError(f"场景图目录为空: {path}")
-    return random.choice(imgs)
+    all_imgs = []
+
+    if os.path.isdir(SCENE_ROOT):
+        for root, _dirs, files in os.walk(SCENE_ROOT):
+            for f in files:
+                if Path(f).suffix.lower() in exts:
+                    all_imgs.append(os.path.join(root, f))
+
+    if not all_imgs:
+        raise FileNotFoundError(f"场景图目录为空或不存在: {SCENE_ROOT}")
+    return random.choice(all_imgs)
 
 
 def _download_image(url_or_path: str, save_path: str) -> bool:
     if url_or_path.startswith("/") or url_or_path.startswith("\\"):
-        # 本地路径（文件上传时的临时文件）
         if os.path.exists(url_or_path):
             import shutil
             shutil.copy2(url_or_path, save_path)
@@ -106,7 +77,6 @@ def _download_image(url_or_path: str, save_path: str) -> bool:
 
 def _process_task(task: dict, worker_id: int) -> None:
     task_id   = task["task_id"]
-    user_id   = task["user_id"]
     model     = task["model"]
     prod_url  = task["product_image_url"]
     scene_url = task.get("scene_image_url") or ""
@@ -119,14 +89,13 @@ def _process_task(task: dict, worker_id: int) -> None:
     generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.png")
 
     try:
-        # 1. 下载商品图
+        # 1. 下载主体图
         if not _download_image(prod_url, product_local):
-            db.fail_task(task_id, "商品图下载失败", refund=True)
+            db.fail_task(task_id, "图片下载失败", refund=True)
             return
 
-        # 2. 选场景图
+        # 2. 确定场景图
         if scene_url:
-            # 用户提供了自定义场景图，下载到本地
             scene_local = os.path.join(TEMP_DIR, f"scene_{task_id}.jpg")
             if not _download_image(scene_url, scene_local):
                 scene_local = None
@@ -134,14 +103,8 @@ def _process_task(task: dict, worker_id: int) -> None:
             scene_local = None
 
         if not scene_local:
-            # 自动分类 → 选场景图
             try:
-                category = classify_image_sync(prod_url, "")
-            except Exception as e:
-                logger.warning(f"[W{worker_id}] 分类失败({e})，使用杂物")
-                category = "杂物"
-            try:
-                scene_local = _get_scene_photo(category)
+                scene_local = _get_random_scene_photo()
             except Exception as e:
                 db.fail_task(task_id, f"场景图获取失败: {e}", refund=True)
                 return
@@ -149,7 +112,7 @@ def _process_task(task: dict, worker_id: int) -> None:
         # 3. 提示词
         final_prompt = prompt if prompt else PROMPT_UNIFIED
 
-        # 4. 生成（model 参数通过 gemini_gen.run_task 传入）
+        # 4. 生成
         logger.info(f"[W{worker_id}] 调用生成接口...")
         success, thumb_url, error_type = gemini_gen.run_task(
             scene_photo=scene_local,
@@ -171,7 +134,7 @@ def _process_task(task: dict, worker_id: int) -> None:
         cos_key    = f"platform_results/{task_id}.png"
         result_url = upload_to_cos(generated_local, cos_key)
         if not result_url:
-            result_url = thumb_url  # fallback 用 geminigen 原始 URL
+            result_url = thumb_url
 
         if not result_url:
             db.fail_task(task_id, "结果上传失败", refund=True)
@@ -179,7 +142,7 @@ def _process_task(task: dict, worker_id: int) -> None:
 
         # 6. 回写成功
         db.finish_task(task_id, result_url)
-        logger.info(f"[W{worker_id}] ✅ 任务完成 {task_id} → {result_url[:60]}")
+        logger.info(f"[W{worker_id}] 任务完成 {task_id} -> {result_url[:60]}")
 
     except Exception as e:
         logger.error(f"[W{worker_id}] 任务异常 {task_id}: {e}")
@@ -216,13 +179,13 @@ _worker_threads: list[threading.Thread] = []
 
 def start_workers() -> None:
     if not GEMINIGEN_USERNAME or not GEMINIGEN_PASSWORD:
-        logger.warning("⚠ 未配置 GEMINIGEN_USERNAME/PASSWORD，Worker 不启动")
+        logger.warning("未配置 GEMINIGEN_USERNAME/PASSWORD，Worker 不启动")
         return
 
     logger.info(f"初始化 GeminiGen 账号: {GEMINIGEN_USERNAME}")
     gemini_gen.set_account(GEMINIGEN_USERNAME, GEMINIGEN_PASSWORD, 0)
     if not gemini_gen.init_login():
-        logger.error("❌ GeminiGen 登录失败，Worker 不启动")
+        logger.error("GeminiGen 登录失败，Worker 不启动")
         return
 
     os.makedirs(TEMP_DIR, exist_ok=True)
@@ -237,7 +200,7 @@ def start_workers() -> None:
         _worker_threads.append(t)
         logger.info(f"Worker-{i} 已创建")
 
-    logger.info(f"✅ {WORKER_COUNT} 个 Worker 已启动")
+    logger.info(f"{WORKER_COUNT} 个 Worker 已启动")
 
 
 def stop_workers() -> None:

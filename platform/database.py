@@ -229,7 +229,9 @@ def get_transactions(user_id: int, limit: int = 50) -> list:
 # ============================================================
 def create_task(user_id: int, model: str, product_image_url: str,
                 scene_image_url: str, prompt_text: str,
-                cost: float, api_key_id: Optional[int] = None) -> str:
+                cost: float, api_key_id: Optional[int] = None,
+                aspect_ratio: str = "1:1", resolution: str = "1K",
+                output_format: str = "PNG") -> str:
     task_id = str(uuid.uuid4())
     conn = get_conn()
     try:
@@ -237,10 +239,12 @@ def create_task(user_id: int, model: str, product_image_url: str,
             cur.execute(
                 "INSERT INTO gen_tasks "
                 "(task_id, user_id, api_key_id, model, product_image_url, "
-                " scene_image_url, prompt_text, cost, status) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending')",
+                " scene_image_url, prompt_text, cost, status, "
+                " aspect_ratio, resolution, output_format) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s)",
                 (task_id, user_id, api_key_id, model,
-                 product_image_url, scene_image_url, prompt_text, cost),
+                 product_image_url, scene_image_url, prompt_text, cost,
+                 aspect_ratio, resolution, output_format),
             )
         conn.commit()
         return task_id

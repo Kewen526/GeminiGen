@@ -47,11 +47,13 @@ def generate(req: GenerateRequest, current_user: dict = Depends(get_current_user
         prompt_text=req.prompt or "",
         cost=cost,
         api_key_id=current_user.get("key_id"),
+        aspect_ratio=req.aspect_ratio or "1:1",
+        resolution=req.resolution or "1K",
+        output_format=req.output_format or "PNG",
     )
 
     ok = db.deduct_balance(current_user["id"], cost, task_id, f"生成任务 {model}")
     if not ok:
-        # 余额刚好被并发请求消耗完
         db.fail_task(task_id, "余额不足", refund=False)
         raise HTTPException(status_code=402, detail="余额不足")
 
@@ -66,10 +68,25 @@ async def generate_upload(
     model: str = Form(DEFAULT_MODEL),
     scene_image: Optional[UploadFile] = File(None),
     prompt: Optional[str] = Form(None),
+    aspect_ratio: Optional[str] = Form("1:1"),
+    resolution: Optional[str] = Form("1K"),
+    output_format: Optional[str] = Form("PNG"),
     current_user: dict = Depends(get_current_user),
 ):
     if model not in MODEL_PRICES:
         raise HTTPException(status_code=400, detail=f"不支持的模型: {model}")
+
+    # 校验枚举值
+    valid_ratios = {"1:1", "16:9", "9:16", "3:4", "4:3"}
+    if aspect_ratio not in valid_ratios:
+        aspect_ratio = "1:1"
+    valid_resolutions = {"1K", "2K", "4K"}
+    if resolution not in valid_resolutions:
+        resolution = "1K"
+    valid_formats = {"PNG", "JPEG"}
+    if (output_format or "PNG").upper() not in valid_formats:
+        output_format = "PNG"
+    output_format = (output_format or "PNG").upper()
 
     cost = MODEL_PRICES[model]
     if current_user["balance"] < cost:
@@ -77,7 +94,6 @@ async def generate_upload(
 
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # 保存上传的商品图并获取可访问 URL
     product_url = await save_upload_to_url(product_image, TEMP_DIR)
     scene_url   = ""
     if scene_image and scene_image.filename:
@@ -91,6 +107,9 @@ async def generate_upload(
         prompt_text=prompt or "",
         cost=cost,
         api_key_id=current_user.get("key_id"),
+        aspect_ratio=aspect_ratio,
+        resolution=resolution,
+        output_format=output_format,
     )
 
     ok = db.deduct_balance(current_user["id"], cost, task_id, f"生成任务 {model}")
