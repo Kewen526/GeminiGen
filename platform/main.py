@@ -26,19 +26,26 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动时初始化 Worker
-    try:
-        from .worker import start_workers
-        start_workers()
-    except Exception as e:
-        logger.error(f"Worker 启动失败: {e}")
+    # 启动时初始化 Worker（仅在启用时）
+    worker_count = os.getenv("WORKER_COUNT", "0")
+    if str(worker_count).isdigit() and int(worker_count) > 0:
+        try:
+            from .worker import start_workers
+
+            start_workers()
+        except Exception as e:
+            logger.error(f"Worker 启动失败: {e}")
+    else:
+        logger.info("WORKER_COUNT=0，跳过 Worker 启动")
     yield
     # 停止时清理
-    try:
-        from .worker import stop_workers
-        stop_workers()
-    except Exception:
-        pass
+    if str(worker_count).isdigit() and int(worker_count) > 0:
+        try:
+            from .worker import stop_workers
+
+            stop_workers()
+        except Exception:
+            pass
 
 
 app = FastAPI(

@@ -12,7 +12,9 @@ from passlib.context import CryptContext
 from .config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 from . import database as db
 
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# 默认使用 pbkdf2_sha256 生成新密码哈希，兼容读取旧 bcrypt 哈希。
+# 这样可以规避某些环境下 passlib+bcrypt 后端兼容性问题（如 bcrypt 5.x）。
+pwd_ctx = CryptContext(schemes=["pbkdf2_sha256", "bcrypt"], deprecated="auto")
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -22,7 +24,11 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_ctx.verify(plain, hashed)
+    try:
+        return pwd_ctx.verify(plain, hashed)
+    except Exception:
+        # 避免因历史 bcrypt 后端异常导致接口 500
+        return False
 
 
 # ── JWT ──────────────────────────────────────────────────────

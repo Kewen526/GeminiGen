@@ -69,7 +69,10 @@ PIP="${VENV_DIR}/bin/pip"
 
 info "安装 Python 依赖包（可能需要1-2分钟）..."
 $PIP install --quiet --upgrade pip
-$PIP install --quiet -r requirements_platform.txt
+# 先安装关键依赖，确保 API 可启动
+$PIP install --quiet fastapi uvicorn[standard] python-multipart python-jose[cryptography] passlib[bcrypt] "bcrypt<5" pymysql pydantic[email] email-validator dnspython requests cos-python-sdk-v5
+# 再安装完整依赖（某些可选包在部分镜像源可能不存在，不阻塞核心服务）
+$PIP install --quiet -r requirements_platform.txt || warn "部分可选依赖安装失败，核心 API 仍可运行"
 success "依赖安装完成"
 
 # ============================================================
@@ -88,7 +91,7 @@ DB_HOST=47.95.157.46
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=root@kunkun
-DB_NAME=quote_iw
+DB_NAME=geminigen_platform
 
 HOST=0.0.0.0
 PORT=8000
@@ -122,7 +125,7 @@ content = re.sub(r'^\s*USE\s+\S+\s*;\s*$', '', content, flags=re.MULTILINE | re.
 conn = pymysql.connect(
     host="47.95.157.46", port=3306,
     user="root", password="root@kunkun",
-    database="quote_iw", charset="utf8mb4",
+    database="geminigen_platform", charset="utf8mb4",
     connect_timeout=10,
 )
 statements = [s.strip() for s in content.split(";") if s.strip()]
@@ -156,7 +159,7 @@ After=network.target
 Type=simple
 User=$(whoami)
 WorkingDirectory=${SCRIPT_DIR}
-ExecStart=${PYTHON} -m platform.main
+ExecStart=/usr/bin/env bash ${SCRIPT_DIR}/run_server.sh
 Restart=always
 RestartSec=5
 StandardOutput=append:${SCRIPT_DIR}/server.log

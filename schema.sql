@@ -1,7 +1,9 @@
--- GeminiGen 对外平台数据库表
--- 在现有 quote_iw 库中新增以下表
+-- GeminiGen 对外平台数据库表（新业务独立库）
+CREATE DATABASE IF NOT EXISTS geminigen_platform
+  DEFAULT CHARACTER SET utf8mb4
+  DEFAULT COLLATE utf8mb4_0900_ai_ci;
 
-USE quote_iw;
+USE geminigen_platform;
 
 -- 用户表
 CREATE TABLE IF NOT EXISTS platform_users (
