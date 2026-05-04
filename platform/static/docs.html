@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>API 文档 — GeminiGen</title>
+<title>API 文档 — Kewen AI</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
   .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
@@ -25,9 +25,9 @@
     <div class="flex items-center gap-4">
       <a href="/" class="flex items-center gap-2">
         <div class="w-8 h-8 gradient-bg rounded-lg flex items-center justify-center">
-          <span class="text-white font-bold text-sm">G</span>
+          <span class="text-white font-bold text-sm">K</span>
         </div>
-        <span class="font-bold text-gray-800">GeminiGen</span>
+        <span class="font-bold text-gray-800">Kewen AI</span>
       </a>
       <span class="text-gray-300">/</span>
       <span class="text-gray-600 text-sm font-medium">API 文档</span>
@@ -65,7 +65,7 @@
     <!-- 概览 -->
     <section id="overview" class="mb-14">
       <h1 class="text-4xl font-extrabold text-gray-900 mb-4">API 文档</h1>
-      <p class="text-gray-600 mb-4 text-lg">GeminiGen 提供标准 REST API，支持 AI 电商图片生成。按次计费，生成成功后扣费，失败自动退款。</p>
+      <p class="text-gray-600 mb-4 text-lg">Kewen AI 提供标准 REST API，支持 AI 图像生成。按积分计费，生成成功后扣费，失败自动退款。</p>
       <div class="bg-purple-50 border border-purple-200 rounded-xl p-4 text-sm text-purple-800">
         <strong>Base URL：</strong> <code class="font-mono">https://your-domain.com</code>
       </div>
@@ -84,10 +84,10 @@
       <h2 class="text-2xl font-bold text-gray-800 mb-4">定价</h2>
       <div class="overflow-hidden rounded-xl border border-gray-200">
         <table class="param-table w-full">
-          <thead><tr><th>模型</th><th>单价（人民币）</th><th>说明</th></tr></thead>
+          <thead><tr><th>模型</th><th>单价（积分）</th><th>说明</th></tr></thead>
           <tbody>
-            <tr><td class="font-mono">nano-banana-2</td><td class="font-bold text-gray-800">¥0.05 / 张</td><td class="text-gray-500">标准版</td></tr>
-            <tr><td class="font-mono">nano-banana-pro</td><td class="font-bold text-gray-800">¥0.06 / 张</td><td class="text-gray-500">专业版，更高质量</td></tr>
+            <tr><td class="font-mono">nano-banana-2</td><td class="font-bold text-gray-800">5 积分 / 张</td><td class="text-gray-500">标准版</td></tr>
+            <tr><td class="font-mono">nano-banana-pro</td><td class="font-bold text-gray-800">6 积分 / 张</td><td class="text-gray-500">专业版，更高质量</td></tr>
           </tbody>
         </table>
       </div>
@@ -248,7 +248,7 @@
   -H "Authorization: Bearer sk-xxxx"
 
 # 响应
-{"balance": 9.9500}</code></pre>
+{"balance": 99.79, "points": 9979}</code></pre>
     </section>
 
     <!-- API Keys -->

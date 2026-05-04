@@ -74,7 +74,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="GeminiGen API",
+    title="Kewen AI API",
     description="AI 图像生成平台",
     version="2.0.0",
     lifespan=lifespan,
