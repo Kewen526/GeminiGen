@@ -831,12 +831,15 @@ const QUICK_PROMPTS = [
 // ── Init ──────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
   if (!token) { showLoginModal(); return; }
+  // 有 token 时立即显示 app，避免等待接口验证期间的闪屏
+  document.getElementById('app').classList.remove('hidden');
   try {
     userInfo = await apiFetch('/auth/me');
     onLoggedIn();
   } catch {
     localStorage.removeItem('gg_token');
     token = null;
+    document.getElementById('app').classList.add('hidden');
     showLoginModal();
   }
 });
