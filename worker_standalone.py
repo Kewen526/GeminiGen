@@ -272,7 +272,6 @@ def cleanup(*paths):
 def process_task(task, worker_id):
     task_id      = task["task_id"]
     model        = task["model"]
-    prod_url     = task["product_image_url"]
     prompt       = task.get("prompt_text") or ""
     aspect_ratio = task.get("aspect_ratio") or "1:1"
     resolution   = task.get("resolution") or "1K"
@@ -280,18 +279,11 @@ def process_task(task, worker_id):
     logger.info(f"[W{worker_id}] 任务开始  task_id={task_id}  model={model}  ratio={aspect_ratio}  res={resolution}")
 
     os.makedirs(TEMP_DIR, exist_ok=True)
-    product_local   = os.path.join(TEMP_DIR, f"prod_{task_id}.jpg")
     generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.png")
-    temp_files = [product_local, generated_local]
+    temp_files = [generated_local]
 
     try:
-        # 1. 下载用户上传的图片
-        logger.info(f"  [W{worker_id}] 下载图片...")
-        if not download_image(prod_url, product_local):
-            fail_task(task_id, "图片下载失败")
-            return
-
-        # 2. 生成（最多 3 次）
+        # 生成（最多 3 次）
         final_url   = None
         MAX_RETRIES = 3
 
@@ -299,7 +291,6 @@ def process_task(task, worker_id):
             logger.info(f"  [W{worker_id}] 生成第 {attempt}/{MAX_RETRIES} 次...")
 
             success, thumb_url, error_type = gemini_gen.run_task(
-                product_image=product_local,
                 save_path=generated_local,
                 prompt_text=prompt,
                 model=model,
@@ -307,13 +298,8 @@ def process_task(task, worker_id):
                 resolution=resolution,
             )
 
-            if error_type == "IMAGE_FORMAT_ERROR":
-                fail_task(task_id, "图片格式/解析错误，无法处理")
-                cleanup(*temp_files)
-                return
-
             if not success:
-                logger.warning(f"  [W{worker_id}] 第{attempt}次生成失败")
+                logger.warning(f"  [W{worker_id}] 第{attempt}次生成失败  error={error_type}")
                 if attempt < MAX_RETRIES:
                     time.sleep(20)
                 continue
@@ -326,13 +312,13 @@ def process_task(task, worker_id):
             cleanup(*temp_files)
             return
 
-        # 4. 上传结果（失败则用直链兜底）
+        # 上传结果（失败则用直链兜底）
         cos_key    = f"platform_results/{task_id}.png"
         result_url = upload_to_cos(generated_local, cos_key)
         if not result_url:
             result_url = final_url
 
-        # 5. 回写成功
+        # 回写成功
         finish_task(task_id, result_url)
         logger.info(f"  [W{worker_id}] 任务完成: {result_url[:60]}")
 

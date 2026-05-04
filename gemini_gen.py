@@ -1,33 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-GeminiGen.ai 自动化模块（Playwright版 + TokenManager 线程隔离）
+GeminiGen.ai 自动化模块 v3（纯Python HTTP + GuardId 自计算）
 ================================================================
-登录核心原理：
-1. 在页面加载前注入 init_script，劫持 window.turnstile.render()
-2. 捕获 Vue.js 注册的 Turnstile 成功回调函数
-3. 用 CapSolver 解码真实 token
-4. 直接调用捕获的回调，Vue 认为验证通过，按钮 enable
-5. 填写邮箱密码，点击 Continue，登录请求正常发出
-
-Token 刷新机制（fire-and-forget 模式）：
-- Worker 发现 token 失效 → 立即通知 TokenManager（非阻塞），自己 sleep 后重试
-- TokenManager 在后台静默完成 reload/登录，完成后 _token_ready 置位
-- Worker 重试时调普通 get_token() → 若刷新还没完就等（最长 300s）
-- 心跳每 60s 检测一次，token 剩余不足 60s 时提前主动刷新
-- 彻底消除：greenlet 线程切换报错 / 60s 等待超时 / 重复读坏 token
+核心：
+1. 通过 init_script 劫持 crypto.subtle.digest，捕获 hY（随机 secretKey）
+2. 通过 init_script 拦截 XHR，从首次 API 请求中提取 domFp
+3. GuardIdGenerator：一次捕获，Python 永久生成 x-guard-id
+4. Turnstile 自适应：默认 skip，被拒后切换 CapSolver，30min 后自动回落
+5. 无需上传任何图片，纯文字提交
 """
 
+import base64
 import hashlib
 import json
-import mimetypes
 import os
 import re
 import random
+import struct
 import time
 import logging
 import threading
 import traceback
-from urllib.parse import parse_qs, urlencode
 
 import requests as req_lib
 from requests.exceptions import ConnectionError as ReqConnectionError, Timeout
@@ -58,11 +51,16 @@ TURNSTILE_PAGE_URL = "https://geminigen.ai/auth/login"
 GENERATE_TIMEOUT    = 600
 API_POLL_INTERVAL   = 15
 CAPSOLVER_MAX_RETRY = 3
-TOKEN_CACHE_TTL     = 180   # 秒，token 有效期
-HEARTBEAT_INTERVAL  = 60    # 秒，心跳间隔（缩短至 60s）
-TOKEN_PREREFRESH    = 60    # 秒，提前多少秒主动刷新（TTL-60=120s 时触发）
+TOKEN_CACHE_TTL     = 180
+HEARTBEAT_INTERVAL  = 60
+TOKEN_PREREFRESH    = 60
 NET_RETRY_COUNT     = 3
 NET_RETRY_DELAY     = 5
+RATE_LIMIT_COOLDOWN = 120
+
+TURNSTILE_SKIP_FAIL_THRESHOLD = 2
+SUBMIT_JITTER_MIN = 1.0
+SUBMIT_JITTER_MAX = 4.0
 
 _IMAGE_FORMAT_ERROR_CODES = (
     "IMAGE_FORMAT","INVALID_IMAGE","IMAGE_PARSE","UNSUPPORTED_IMAGE",
@@ -80,7 +78,118 @@ _BROWSER_DEAD_KEYWORDS = (
     "Target closed","Page closed","Connection refused",
     "Connection closed","socket hang up","ECONNREFUSED","10061",
 )
+_RATE_LIMIT_INDICATORS = (
+    "rate_limit","too_many","rate limit","ratelimit",
+    "请求过多","频率","too_many_requests","request_limit",
+)
 
+# ============================================================
+# 实例级限速冷却
+# ============================================================
+_rate_limited_until: float = 0.0
+_rate_limit_lock = threading.Lock()
+
+# ============================================================
+# Model 自适应状态机
+# ============================================================
+MODEL_PRIMARY         = "nano-banana-2"
+MODEL_FALLBACK        = "nano-banana-pro"
+MODEL_REVERT_INTERVAL = 1800
+
+_current_model:     str   = MODEL_PRIMARY
+_model_switched_at: float = 0.0
+_model_lock = threading.Lock()
+
+def _get_current_model() -> str:
+    with _model_lock:
+        return _current_model
+
+def _on_model_rate_limited():
+    global _current_model, _model_switched_at
+    with _model_lock:
+        now = time.time()
+        revert_at = time.strftime('%H:%M:%S', time.localtime(now + MODEL_REVERT_INTERVAL))
+        if _current_model == MODEL_PRIMARY:
+            _current_model     = MODEL_FALLBACK
+            _model_switched_at = now
+            logger.warning(f"  [Model] {MODEL_PRIMARY} 触发限流，切换为 {MODEL_FALLBACK}，将于 {revert_at} 尝试回切")
+        else:
+            _model_switched_at = now
+            logger.info(f"  [Model] 仍在限流，重置回切计时器，将于 {revert_at} 再次尝试回切")
+
+def _check_model_auto_revert():
+    global _current_model, _model_switched_at
+    with _model_lock:
+        if (_current_model == MODEL_FALLBACK
+                and _model_switched_at > 0
+                and time.time() - _model_switched_at >= MODEL_REVERT_INTERVAL):
+            _current_model     = MODEL_PRIMARY
+            _model_switched_at = 0.0
+            logger.info(f"  [Model] 30分钟已过，回切尝试 {MODEL_PRIMARY}...")
+
+# ============================================================
+# Turnstile 自适应状态机
+# ============================================================
+TURNSTILE_RESET_INTERVAL = 1800
+
+_turnstile_skip_fail_count: int  = 0
+_turnstile_use_capsolver:  bool  = False
+_turnstile_reset_at:       float = 0.0
+_turnstile_lock = threading.Lock()
+
+def _turnstile_on_skip_fail():
+    global _turnstile_skip_fail_count, _turnstile_use_capsolver, _turnstile_reset_at
+    with _turnstile_lock:
+        _turnstile_skip_fail_count += 1
+        if (not _turnstile_use_capsolver and
+                _turnstile_skip_fail_count >= TURNSTILE_SKIP_FAIL_THRESHOLD):
+            _turnstile_use_capsolver = True
+            _turnstile_reset_at      = time.time() + TURNSTILE_RESET_INTERVAL
+            logger.warning(
+                f"  [Turnstile] skip 连续失败 {_turnstile_skip_fail_count} 次，"
+                f"切换 CapSolver 模式，将于 "
+                f"{time.strftime('%H:%M:%S', time.localtime(_turnstile_reset_at))} 重试 skip"
+            )
+
+def _turnstile_on_success():
+    global _turnstile_skip_fail_count
+    with _turnstile_lock:
+        _turnstile_skip_fail_count = 0
+
+def _get_turnstile_token() -> str:
+    global _turnstile_use_capsolver, _turnstile_skip_fail_count, _turnstile_reset_at
+    with _turnstile_lock:
+        if _turnstile_use_capsolver and time.time() >= _turnstile_reset_at:
+            _turnstile_use_capsolver   = False
+            _turnstile_skip_fail_count = 0
+            logger.info("  [Turnstile] 定时重置，重新尝试 skip 模式")
+        need_capsolver = _turnstile_use_capsolver
+
+    if not need_capsolver:
+        logger.debug("  [Turnstile] 使用 skip")
+        return "skip"
+    logger.info("  [Turnstile] 使用 CapSolver 解码...")
+    return _solve_turnstile()
+
+def _trigger_rate_limit():
+    global _rate_limited_until
+    with _rate_limit_lock:
+        new_until = time.time() + RATE_LIMIT_COOLDOWN
+        if new_until > _rate_limited_until:
+            _rate_limited_until = new_until
+            logger.warning(
+                f"  [限速冷却] 实例暂停提交 {RATE_LIMIT_COOLDOWN}s，"
+                f"截止 {time.strftime('%H:%M:%S', time.localtime(new_until))}"
+            )
+
+def _wait_for_rate_limit():
+    while True:
+        with _rate_limit_lock:
+            remaining = _rate_limited_until - time.time()
+        if remaining <= 0:
+            return
+        logger.warning(f"  [限速冷却] 还需等待 {remaining:.0f}s...")
+        time.sleep(min(remaining, 10))
 
 def _is_image_format_error(ec, em):
     ec = (ec or "").upper(); em = (em or "").lower()
@@ -108,7 +217,44 @@ def rsleep(a, b): time.sleep(random.uniform(a, b))
 
 
 # ============================================================
-# 任务注册表（多 Worker 共享，与浏览器无关）
+# GuardIdGenerator — 纯 Python 生成 x-guard-id
+# ============================================================
+class GuardIdGenerator:
+    """
+    逆向自 geminigen.ai/_nuxt/D6qDEc1Pjs 的 ab() 函数。
+    算法（85字节）：
+      [0]      = 0x01 (版本常量)
+      [1:17]   = SHA256(hy:stable_id)[:32 hex] → 16字节（固定 per session）
+      [17:21]  = timeBucket uint32 big-endian（每60s变化一次）
+      [21:53]  = SHA256(path:METHOD:u:timeBucket:hy) → 32字节（per请求）
+      [53:85]  = domFp → 32字节（CSS指纹，固定 per 浏览器）
+    """
+    def __init__(self, hy: str, stable_id: str, dom_fp: str):
+        self.hy        = hy
+        self.stable_id = stable_id
+        self.dom_fp    = dom_fp
+        self._u = hashlib.sha256(f"{hy}:{stable_id}".encode()).hexdigest()[:32]
+        logger.info(
+            f"GuardIdGenerator: 初始化完成  "
+            f"stable_id={stable_id[:10]}...  u={self._u[:8]}...  dom_fp={dom_fp[:8]}..."
+        )
+
+    def generate(self, path: str, method: str) -> str:
+        tb = int(time.time() * 1000) // 60000
+        c  = hashlib.sha256(
+            f"{path}:{method.upper()}:{self._u}:{tb}:{self.hy}".encode()
+        ).hexdigest()
+        buf = bytearray()
+        buf.append(1)
+        buf.extend(bytes.fromhex(self._u))
+        buf.extend(struct.pack(">I", tb))
+        buf.extend(bytes.fromhex(c))
+        buf.extend(bytes.fromhex(self.dom_fp))
+        return base64.urlsafe_b64encode(bytes(buf)).rstrip(b"=").decode()
+
+
+# ============================================================
+# 任务注册表
 # ============================================================
 _registry_lock = threading.Lock()
 _task_registry = {}
@@ -147,7 +293,7 @@ def _get_task_result(uuid):
 
 
 # ============================================================
-# Turnstile 拦截脚本
+# Init Scripts
 # ============================================================
 _TURNSTILE_INTERCEPT_SCRIPT = """
 (function() {
@@ -159,7 +305,6 @@ _TURNSTILE_INTERCEPT_SCRIPT = """
         window.turnstile.render = function(container, params) {
             if (params && typeof params.callback === 'function') {
                 window.__ts_cb = params.callback;
-                console.log('[TS-PATCH] 已捕获 callback');
             }
             var wid = _origRender(container, params);
             window.__ts_wid = wid; return wid;
@@ -169,7 +314,6 @@ _TURNSTILE_INTERCEPT_SCRIPT = """
             if (window.__ts_injected_token) return window.__ts_injected_token;
             return _origGR(id);
         };
-        console.log('[TS-PATCH] turnstile.render 已劫持');
     }
     _patch();
     var _tid = setInterval(function() { _patch(); if (window.__ts_patched) clearInterval(_tid); }, 50);
@@ -199,9 +343,71 @@ _TURNSTILE_INTERCEPT_SCRIPT = """
 })();
 """
 
+_GUARD_CAPTURE_SCRIPT = """
+(function() {
+    window.__guard_hy_raw = null;
+    window.__guard_dom_fp = null;
+
+    function _extractDomFp(gid) {
+        try {
+            if (!gid || gid.length < 80) return;
+            var b64 = gid.replace(/-/g,'+').replace(/_/g,'/');
+            while (b64.length % 4) b64 += '=';
+            var raw = atob(b64);
+            if (raw.length < 85) return;
+            var hex = [];
+            for (var i = 53; i < 85; i++) {
+                var n = raw.charCodeAt(i).toString(16);
+                hex.push(n.length < 2 ? '0'+n : n);
+            }
+            window.__guard_dom_fp = hex.join('');
+            console.log('[GUARD] domFp captured: ' + window.__guard_dom_fp.slice(0,12) + '...');
+        } catch(e) {}
+    }
+
+    if (window.crypto && window.crypto.subtle) {
+        var _origDigest = window.crypto.subtle.digest.bind(window.crypto.subtle);
+        window.crypto.subtle.digest = async function(algo, data) {
+            var result = await _origDigest(algo, data);
+            if (window.__guard_hy_raw === null) {
+                try {
+                    var text = new TextDecoder('utf-8', {fatal: false}).decode(data);
+                    if (text.indexOf('ainnate-antibot-key-v1-') !== -1) {
+                        window.__guard_hy_raw = text;
+                        console.log('[GUARD] hY captured len=' + text.length);
+                    }
+                } catch(e) {}
+            }
+            return result;
+        };
+    }
+
+    var _origSetReqHdr = XMLHttpRequest.prototype.setRequestHeader;
+    XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+        if (window.__guard_dom_fp === null) {
+            if (typeof name === 'string' && name.toLowerCase() === 'x-guard-id') {
+                _extractDomFp(value);
+            }
+        }
+        return _origSetReqHdr.call(this, name, value);
+    };
+
+    var _origFetch = window.fetch;
+    window.fetch = async function(url, opts) {
+        if (window.__guard_dom_fp === null && opts) {
+            var h = opts.headers || {};
+            _extractDomFp(h['x-guard-id'] || h['X-Guard-Id'] || '');
+        }
+        return _origFetch.apply(this, arguments);
+    };
+
+    console.log('[GUARD] XHR + fetch + digest interceptors installed');
+})();
+"""
+
 
 # ============================================================
-# 浏览器辅助函数（仅在 TokenManager 线程调用）
+# 浏览器辅助函数
 # ============================================================
 def _is_logged_in(page):
     try:
@@ -229,11 +435,10 @@ def _do_login(page: Page) -> bool:
         page.goto(LOGIN_URL, timeout=60000)
         page.wait_for_load_state("domcontentloaded")
     except Exception as e:
-        logger.error(f"  ❌ 打开登录页失败: {e}"); return False
+        logger.error(f"  打开登录页失败: {e}"); return False
 
     rsleep(2.0, 3.0); _close_popup(page)
 
-    # 填邮箱
     email_filled = False
     for sel in ['input[name="username"]', 'input[name="email"]',
                 'input[type="email"]', 'input[placeholder*="email" i]']:
@@ -241,13 +446,11 @@ def _do_login(page: Page) -> bool:
             el = page.locator(sel).first
             if el.is_visible(timeout=2000):
                 el.fill(USERNAME); rsleep(0.5, 1.0)
-                email_filled = True
-                logger.info(f"  邮箱已填入（{sel}）"); break
+                email_filled = True; break
         except: continue
     if not email_filled:
-        logger.error("  ❌ 找不到邮箱输入框"); return False
+        logger.error("  找不到邮箱输入框"); return False
 
-    # 填密码
     pwd_filled = False
     for sel in ['input[name="password"]', 'input[type="password"]']:
         try:
@@ -257,17 +460,15 @@ def _do_login(page: Page) -> bool:
                 pwd_filled = True; break
         except: continue
     if not pwd_filled:
-        logger.error("  ❌ 找不到密码输入框"); return False
+        logger.error("  找不到密码输入框"); return False
 
-    # CapSolver 解 Turnstile
     logger.info("  解 Turnstile（CapSolver）...")
     try:
         ts_token = _solve_turnstile()
-        logger.info(f"  ✅ Turnstile token（{len(ts_token)}字符）")
+        logger.info(f"  Turnstile token（{len(ts_token)}字符）")
     except Exception as e:
-        logger.error(f"  ❌ Turnstile 失败: {e}"); return False
+        logger.error(f"  Turnstile 失败: {e}"); return False
 
-    # 注入 token
     try:
         ok = page.evaluate(f"window.__inject_ts('{ts_token}')")
         logger.info(f"  注入结果: callback已调用={ok}")
@@ -275,12 +476,6 @@ def _do_login(page: Page) -> bool:
         logger.warning(f"  注入异常: {e}")
     rsleep(1.5, 2.5)
 
-    try:
-        btn_disabled = page.evaluate("document.querySelector('button[type=\"submit\"]')?.disabled")
-        logger.info(f"  按钮 disabled={btn_disabled}")
-    except: pass
-
-    # 点击 Continue
     submitted = False
     try:
         btn = page.locator('button[type="submit"]').first
@@ -291,12 +486,11 @@ def _do_login(page: Page) -> bool:
     if not submitted:
         try:
             page.locator('input[name="password"], input[type="password"]').first.press("Enter")
-            submitted = True; logger.info("  已按 Enter 提交")
+            submitted = True
         except: pass
     if not submitted:
-        logger.error("  ❌ 无法提交表单"); return False
+        logger.error("  无法提交表单"); return False
 
-    # 等待登录成功
     logger.info("  等待登录结果...")
     deadline = time.time() + 60
     while time.time() < deadline:
@@ -309,17 +503,16 @@ def _do_login(page: Page) -> bool:
                         txt = (el.text_content() or "").strip().lower()
                         if txt and any(k in txt for k in
                             ["invalid","incorrect","wrong","failed","密码错误","登录失败"]):
-                            logger.error(f"  ❌ 登录错误: {txt[:80]}"); return False
+                            logger.error(f"  登录错误: {txt[:80]}"); return False
                 except: pass
             if "geminigen.ai" in cur_url and "/auth" not in cur_url:
                 rsleep(2.0, 3.0)
                 if _is_logged_in(page):
-                    logger.info(f"  ✅ 登录成功 (URL={cur_url[:60]})"); return True
-                logger.info("  URL 已跳转但 token 未就绪，继续等待...")
+                    logger.info(f"  登录成功 (URL={cur_url[:60]})"); return True
         except Exception as e:
             if _is_browser_dead_error(e): raise
             logger.warning(f"  等待时异常: {e}")
-    logger.error("  ❌ 登录超时"); return False
+    logger.error("  登录超时"); return False
 
 def _extract_token_from_browser(page):
     for attempt in range(6):
@@ -329,11 +522,11 @@ def _extract_token_from_browser(page):
                     var token='', gid=localStorage.getItem('guard_stable_id')||'';
                     var auth=localStorage.getItem('authStore');
                     if(auth){ try{ token=JSON.parse(auth).access_token||''; }catch(e){} }
-                    return { access_token: token, guard_id: gid };
+                    return { access_token: token, guard_stable_id: gid };
                 })()
             """)
-            token = data.get("access_token", ""); gid = data.get("guard_id", "")
-            logger.info(f"  提取结果: token={'有' if token else '空'}  gid={'有('+gid[:20]+')' if gid else '空'}")
+            token = data.get("access_token", "")
+            gid   = data.get("guard_stable_id", "")
             if token: return token, gid
             logger.warning(f"  提取第{attempt+1}次: token 为空")
             rsleep(3.0, 5.0)
@@ -343,94 +536,82 @@ def _extract_token_from_browser(page):
 
 
 # ============================================================
-# TokenManager —— 专用守护线程，唯一允许操作浏览器的角色
+# TokenManager
 # ============================================================
 class _TokenManager(threading.Thread):
-    """
-    fire-and-forget 刷新机制：
-    - Worker 发现 token 失效 → 调 get_token(force_refresh=True, stale_token=xxx)
-      → TokenManager 在后台开始刷新，立即返回 (None, None) 给 Worker
-      → Worker 自己 sleep 后重试普通 get_token()
-    - Worker 普通调 get_token() → 若刷新在进行中则等待（最长 300s），完成后返回
-    - 心跳每 60s 一次，token 剩余不足 60s 时提前主动刷新
-    """
 
     def __init__(self):
         super().__init__(name="TokenManager", daemon=True)
 
-        # Token 状态
         self._token      = None
-        self._gid        = None
+        self._stable_id  = None
         self._token_time = 0.0
         self._state_lock = threading.Lock()
-
-        # 被服务器拒绝的坏 token 集合
         self._bad_tokens: set = set()
-
-        # 是否正在刷新（防重入）
         self._refreshing = False
 
-        # 信号
-        self._token_ready     = threading.Event()   # 有可用 token 时置位
-        self._refresh_request = threading.Event()   # 有刷新请求时置位
+        self._token_ready     = threading.Event()
+        self._refresh_request = threading.Event()
         self._stop_event      = threading.Event()
 
-        # 浏览器（仅本线程访问）
         self._pw:      Playwright     = None
         self._context: BrowserContext = None
         self._page:    Page           = None
 
-    # ── Worker 公共接口 ────────────────────────────────────────
+        self._guard_gen: GuardIdGenerator = None
+        self._guard_trigger_at: float = 0.0
+        self._guard_triggered:  bool  = False
+
+        self._gen_queue       = []
+        self._gen_queue_lock  = threading.Lock()
+        self._gen_queue_ready = threading.Event()
+
+    # ── 公共接口 ──────────────────────────────────────────────
 
     def get_token(self, force_refresh=False, stale_token=None, timeout=300):
-        """
-        force_refresh=True  → 非阻塞：通知刷新，立即返回 (None, None)，Worker 自己重试
-        force_refresh=False → 阻塞等待：有 token 直接返回，正在刷新则等最多 timeout 秒
-        """
         with self._state_lock:
             if force_refresh and stale_token:
-                # 记录坏 token
                 self._bad_tokens.add(stale_token)
-                # 如果当前持有的是一个更新的有效 token，直接返回
                 if self._token and self._token not in self._bad_tokens:
-                    logger.debug("TokenManager: 已有更新 token，直接返回")
-                    return self._token, self._gid
-                # 触发后台刷新，立即返回 None（Worker 自己 sleep 重试）
+                    return self._token, self._stable_id
                 if not self._refreshing:
                     self._token_ready.clear()
                     self._refresh_request.set()
                     logger.info("TokenManager: 收到 token 失效通知，后台刷新已触发")
-                return None, None   # ← 非阻塞，Worker 重试
+                return None, None
 
-            # 普通获取：有有效 token 直接返回
             if (self._token and
                     self._token not in self._bad_tokens and
                     time.time() - self._token_time < TOKEN_CACHE_TTL):
-                return self._token, self._gid
+                return self._token, self._stable_id
 
-            # 没有有效 token，触发刷新（如果还没在刷）
             if not self._refreshing:
                 self._token_ready.clear()
                 self._refresh_request.set()
 
-        # 等待刷新完成（最长 timeout 秒）
         if self._token_ready.wait(timeout=timeout):
             with self._state_lock:
                 if self._token and self._token not in self._bad_tokens:
-                    return self._token, self._gid
+                    return self._token, self._stable_id
         logger.error(f"TokenManager.get_token: 等待超时({timeout}s)")
         return None, None
 
     def invalidate(self, bad_token=None):
-        """Worker 通过 HTTP 层发现 token 无效时调用（非阻塞通知）"""
         with self._state_lock:
-            if bad_token:
-                self._bad_tokens.add(bad_token)
+            if bad_token: self._bad_tokens.add(bad_token)
             self._token      = None
             self._token_time = 0.0
             if not self._refreshing:
                 self._token_ready.clear()
                 self._refresh_request.set()
+
+    def get_guard_id(self, path: str, method: str) -> str:
+        if self._guard_gen is not None:
+            try:
+                return self._guard_gen.generate(path, method)
+            except Exception as e:
+                logger.warning(f"GuardIdGenerator 计算失败: {e}")
+        return ""
 
     def stop(self):
         self._stop_event.set()
@@ -446,17 +627,36 @@ class _TokenManager(threading.Thread):
             logger.error(f"TokenManager: 浏览器初始化失败: {e}")
             self._token_ready.set(); return
 
-        # 首次刷新（含登录）
         self._do_refresh(is_first=True)
 
+        last_heartbeat = time.time()
         while not self._stop_event.is_set():
-            triggered = self._refresh_request.wait(timeout=HEARTBEAT_INTERVAL)
+            self._gen_queue_ready.wait(timeout=1.0)
+            self._gen_queue_ready.clear()
             if self._stop_event.is_set(): break
-            if triggered:
+
+            while True:
+                item = None
+                with self._gen_queue_lock:
+                    if self._gen_queue:
+                        item = self._gen_queue.pop(0)
+                if item is None: break
+                self._execute_browser_gen(item)
+
+            if self._refresh_request.is_set():
                 self._refresh_request.clear()
                 self._do_refresh()
-            else:
+
+            if self._guard_gen is None:
+                now = time.time()
+                if not self._guard_triggered and now >= self._guard_trigger_at > 0:
+                    self._guard_triggered = True
+                    self._trigger_spa_request()
+                self._try_init_guard_gen()
+
+            if time.time() - last_heartbeat >= HEARTBEAT_INTERVAL:
                 self._heartbeat()
+                last_heartbeat = time.time()
 
         self._cleanup_browser()
         logger.info("TokenManager: 线程已退出")
@@ -464,25 +664,17 @@ class _TokenManager(threading.Thread):
     # ── Token 刷新 ────────────────────────────────────────────
 
     def _do_refresh(self, is_first=False):
-        """
-        核心刷新流程，仅在 TokenManager 线程执行。
-        始终 reload 页面（让 SPA 用 refresh_token 换新 access_token）；
-        若 reload 后拿到的仍是坏 token，执行完整重新登录。
-        """
         with self._state_lock:
             if self._refreshing:
-                logger.debug("TokenManager: 刷新已在进行中，跳过重复调用")
                 return
             self._refreshing  = True
             self._token_ready.clear()
             bad_snapshot = set(self._bad_tokens)
 
         logger.info(f"TokenManager: 开始刷新 Token（首次={is_first}）...")
-
         try:
             for attempt in range(3):
                 try:
-                    # 检查/重建浏览器
                     if not self._is_context_alive():
                         logger.warning(f"TokenManager: 浏览器已死（第{attempt+1}次），重建...")
                         self._rebuild_context()
@@ -491,9 +683,7 @@ class _TokenManager(threading.Thread):
 
                     page = self._page
 
-                    # ── 首次进入：直接导航到 App ──
                     if is_first:
-                        logger.info("TokenManager: 首次导航到 App 页面...")
                         try:
                             page.goto(APP_URL, timeout=60000)
                             page.wait_for_load_state("domcontentloaded")
@@ -509,11 +699,9 @@ class _TokenManager(threading.Thread):
                             else:
                                 logger.error(f"TokenManager: 首次导航失败: {e}"); continue
                     else:
-                        # ── 非首次：始终 reload，让 SPA 刷新 token ──
                         try:
                             cur = page.url or ""
                             if "geminigen.ai" not in cur:
-                                logger.info("TokenManager: 页面不在 app，重新导航...")
                                 page.goto(APP_URL, timeout=60000)
                                 page.wait_for_load_state("domcontentloaded")
                                 rsleep(3.0, 5.0); _close_popup(page)
@@ -534,7 +722,6 @@ class _TokenManager(threading.Thread):
                             except Exception as e2:
                                 logger.error(f"TokenManager: 导航失败: {e2}"); continue
 
-                    # ── 检查是否需要登录 ──
                     needs_login = False
                     try:
                         cur = page.url or ""
@@ -550,12 +737,11 @@ class _TokenManager(threading.Thread):
                         needs_login = True
 
                     if needs_login:
-                        logger.info("TokenManager: ⚠ 需要登录...")
+                        logger.info("TokenManager: 需要登录...")
                         try:
                             login_ok = _do_login(page)
                         except Exception as login_e:
                             if _is_browser_dead_error(login_e):
-                                logger.warning("TokenManager: 登录中浏览器死掉，重建后重试...")
                                 self._rebuild_context()
                                 if self._context is None: continue
                                 page = self._page
@@ -566,21 +752,15 @@ class _TokenManager(threading.Thread):
                         if not login_ok:
                             logger.error("TokenManager: 登录失败"); continue
 
-                    # ── 提取 token ──
-                    token, gid = _extract_token_from_browser(page)
-
+                    token, stable_id = _extract_token_from_browser(page)
                     if not token:
                         logger.warning(f"TokenManager: 提取 Token 为空（第{attempt+1}次）")
                         time.sleep(5); continue
 
-                    # ── 验证：不能是已知坏 token ──
                     if token in bad_snapshot:
-                        logger.warning(
-                            f"TokenManager: reload 后拿到的仍是坏 token（第{attempt+1}次），"
-                            "清除 localStorage 强制重登录..."
-                        )
+                        logger.warning("TokenManager: 仍是坏 token，强制重登录...")
                         try: page.evaluate("localStorage.removeItem('authStore')")
-                        except Exception: pass
+                        except: pass
                         try:
                             page.goto(LOGIN_URL, timeout=60000)
                             page.wait_for_load_state("domcontentloaded")
@@ -590,29 +770,107 @@ class _TokenManager(threading.Thread):
                             logger.error(f"TokenManager: 强制重登录异常: {e}"); continue
                         if not login_ok:
                             logger.error("TokenManager: 强制重登录失败"); continue
-                        token, gid = _extract_token_from_browser(page)
+                        token, stable_id = _extract_token_from_browser(page)
                         if not token or token in bad_snapshot:
                             logger.error("TokenManager: 重登录后 token 仍无效"); continue
 
-                    # ── 成功 ──
-                    logger.info(f"TokenManager: ✅ 获得新 Token: {token[:30]}...")
-                    self._set_token(token, gid)
+                    logger.info(f"TokenManager: 获得新 Token: {token[:30]}...")
+                    self._set_token(token, stable_id)
+
+                    if self._guard_gen is None:
+                        self._guard_triggered  = False
+                        self._guard_trigger_at = time.time() + 5
+                        logger.info("TokenManager: Guard 初始化已调度（5s 后触发 SPA）...")
+
                     return
 
                 except Exception as e:
                     logger.error(f"TokenManager: 刷新异常（第{attempt+1}次）: {e}")
                     traceback.print_exc(); time.sleep(5)
 
-            logger.error("TokenManager: ❌ Token 刷新连续失败3次")
-
+            logger.error("TokenManager: Token 刷新连续失败3次")
         finally:
             with self._state_lock:
                 self._refreshing = False
-            # 无论成败都 set，防止 Worker 永久阻塞
             self._token_ready.set()
 
+    def _try_init_guard_gen(self):
+        try:
+            hy_raw = self._page.evaluate("window.__guard_hy_raw")
+            dom_fp = self._page.evaluate("window.__guard_dom_fp")
+
+            if not (hy_raw and dom_fp and len(dom_fp) == 64):
+                return False
+
+            colon     = hy_raw.index(':') if ':' in hy_raw else len(hy_raw)
+            hy        = hy_raw[:colon]
+            stable_id = hy_raw[colon+1:] if ':' in hy_raw else ""
+
+            if not stable_id:
+                stable_id = self._page.evaluate(
+                    "localStorage.getItem('guard_stable_id') || ''"
+                ) or ""
+
+            self._guard_gen = GuardIdGenerator(hy=hy, stable_id=stable_id, dom_fp=dom_fp)
+            self._verify_guard_gen()
+            if self._guard_gen is not None:
+                logger.info("TokenManager: GuardIdGenerator 就绪，后续提交走纯 Python 路径")
+                return True
+        except Exception as e:
+            logger.debug(f"_try_init_guard_gen: {e}")
+        return False
+
+    def _trigger_spa_request(self):
+        logger.info("TokenManager: 主动触发 SPA API 请求...")
+        try:
+            self._page.evaluate("""
+                (async () => {
+                    try {
+                        const el  = document.getElementById('__nuxt');
+                        const app = el && el.__vue_app__;
+                        if (app && app.config.globalProperties.$router) {
+                            const router = app.config.globalProperties.$router;
+                            await router.push('/app/imagen?_t=' + Date.now());
+                        }
+                    } catch(e) {}
+                    try {
+                        document.dispatchEvent(new Event('visibilitychange'));
+                        window.dispatchEvent(new Event('focus'));
+                    } catch(e) {}
+                    try {
+                        const el  = document.getElementById('__nuxt');
+                        const app = el && el.__vue_app__;
+                        if (app) {
+                            const pinia = app._context.provides.pinia;
+                            if (pinia && pinia._s) {
+                                for (const [id, store] of pinia._s.entries()) {
+                                    for (const key of Object.keys(store)) {
+                                        if (typeof store[key] === 'function' &&
+                                            /^(fetch|load|init|refresh|get)/i.test(key)) {
+                                            try { await store[key](); return; } catch(e2) {}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } catch(e) {}
+                })()
+            """)
+        except Exception as e:
+            logger.debug(f"_trigger_spa_request: {e}")
+
+    def _verify_guard_gen(self):
+        try:
+            gid = self._guard_gen.generate("/api/test", "get")
+            raw = base64.urlsafe_b64decode(gid + "====")
+            assert len(raw) == 85, f"长度错误: {len(raw)}"
+            assert raw[0] == 1, f"version byte 错误: {raw[0]}"
+            logger.info(f"TokenManager: GuardIdGenerator 验证通过  sample={gid[:20]}...")
+        except Exception as e:
+            logger.error(f"TokenManager: GuardIdGenerator 验证失败: {e}")
+            self._guard_gen = None
+
     def _heartbeat(self):
-        """定期主动检测 token 健康状态"""
         with self._state_lock:
             token     = self._token
             token_age = time.time() - self._token_time
@@ -626,30 +884,24 @@ class _TokenManager(threading.Thread):
                     self._refresh_request.set()
             return
 
-        # 提前 TOKEN_PREREFRESH 秒主动刷新
         if token_age > TOKEN_CACHE_TTL - TOKEN_PREREFRESH:
-            logger.info(
-                f"TokenManager: 心跳发现 Token 即将过期"
-                f"（已用{token_age:.0f}s / TTL={TOKEN_CACHE_TTL}s），主动刷新..."
-            )
+            logger.info(f"TokenManager: Token 即将过期（已用{token_age:.0f}s），主动刷新...")
             with self._state_lock:
                 if not self._refreshing:
                     self._token_ready.clear()
                     self._refresh_request.set()
             return
 
-        # 轻量 HTTP 探测
         try:
-            headers = _build_headers(token)
+            guard_id = self.get_guard_id("/api/histories", "get")
+            headers  = _build_headers(token, guard_id)
             resp = req_lib.get(
                 f"{API_BASE}/histories?items_per_page=1&page=1",
                 headers=headers, timeout=15,
                 proxies={"http": None, "https": None}
             )
             if resp.status_code in (401, 403):
-                logger.warning(
-                    f"TokenManager: 心跳 HTTP {resp.status_code}，token 已失效，触发刷新..."
-                )
+                logger.warning(f"TokenManager: 心跳 HTTP {resp.status_code}，触发刷新...")
                 with self._state_lock:
                     if token: self._bad_tokens.add(token)
                     self._token = None; self._token_time = 0.0
@@ -661,15 +913,293 @@ class _TokenManager(threading.Thread):
         except Exception as e:
             logger.debug(f"TokenManager: 心跳网络异常（忽略）: {e}")
 
-    def _set_token(self, token, gid):
+    def _set_token(self, token, stable_id):
         with self._state_lock:
             self._token      = token
-            self._gid        = gid
+            self._stable_id  = stable_id
             self._token_time = time.time()
-            self._bad_tokens.clear()   # 新 token 成功，清空坏记录
+            self._bad_tokens.clear()
         self._token_ready.set()
 
-    # ── 浏览器管理（仅本线程）────────────────────────────────
+    # ── 提交队列 ──────────────────────────────────────────────
+
+    def submit_generate(self, prompt_text, aspect_ratio, resolution, model=None, timeout=300):
+        """Worker线程调用：排队等待提交生成任务"""
+        if model is None:
+            model = MODEL_PRIMARY
+        event      = threading.Event()
+        result_box = [None]
+        with self._gen_queue_lock:
+            self._gen_queue.append((event, result_box, prompt_text, aspect_ratio, resolution, model))
+            qlen = len(self._gen_queue)
+        self._gen_queue_ready.set()
+        if qlen > 1:
+            logger.debug(f"TokenManager: 提交队列积压 {qlen} 项")
+        if event.wait(timeout=timeout):
+            return result_box[0] or (0, None, "empty_result")
+        logger.error(f"TokenManager.submit_generate: 超时 ({timeout}s)")
+        return (0, None, "browser_timeout")
+
+    def _execute_browser_gen(self, item):
+        event, result_box, prompt_text, aspect_ratio, resolution, model = item
+        try:
+            result_box[0] = self._do_generate(prompt_text, aspect_ratio, resolution, model)
+        except Exception as e:
+            logger.error(f"TokenManager._execute_browser_gen 异常: {e}")
+            result_box[0] = (0, None, "browser_exception")
+        finally:
+            event.set()
+
+    def _do_generate(self, prompt_text, aspect_ratio, resolution, model=MODEL_PRIMARY):
+        """
+        提交 generate_image 请求。
+        方案A：Python requests + Python 生成的 guard-id（GuardIdGenerator 就绪时）
+        方案B：浏览器 fetch 降级（guard-id 由浏览器 Axios 拦截器自动生成）
+        Turnstile 自适应：默认 skip，被拒后切换 CapSolver
+        """
+        with self._state_lock:
+            token = self._token
+        if not token:
+            return (0, None, "no_token")
+
+        try:
+            ts_token = _get_turnstile_token()
+        except Exception as e:
+            logger.error(f"  CapSolver 获取失败，本次跳过提交: {e}")
+            return (0, None, "turnstile_capsolver_failed")
+
+        logger.info(f"  [Model] 当前使用: {model}")
+
+        # ── 方案A：Python HTTP ──
+        if self._guard_gen is not None:
+            guard_id = self._guard_gen.generate("/api/generate_image", "post")
+            logger.info(f"  [Python] 提交 generate_image  ts={ts_token[:8]}  guard_id={guard_id[:20]}...")
+            status_code, task_uuid, err = _api_generate_http(
+                token, guard_id, ts_token, prompt_text, aspect_ratio, resolution, model
+            )
+            if err == "TURNSTILE_INVALID":
+                _turnstile_on_skip_fail()
+                logger.info("  [Turnstile] skip 被拒，立即用 CapSolver 重试...")
+                try:
+                    ts_token = _solve_turnstile()
+                except Exception as e:
+                    logger.error(f"  CapSolver 重试获取失败: {e}")
+                    return (status_code, None, "turnstile_capsolver_failed")
+                guard_id = self._guard_gen.generate("/api/generate_image", "post")
+                status_code, task_uuid, err = _api_generate_http(
+                    token, guard_id, ts_token, prompt_text, aspect_ratio, resolution, model
+                )
+            if err == "" and task_uuid:
+                _turnstile_on_success()
+            return (status_code, task_uuid, err)
+
+        # ── 方案B：浏览器 fetch 降级 ──
+        logger.info("  [Browser] GuardIdGenerator 未就绪，降级使用浏览器 fetch...")
+        if not self._is_context_alive():
+            self._rebuild_context()
+            if not self._is_context_alive():
+                return (0, None, "browser_dead")
+        status_code, task_uuid, err = self._do_browser_fetch(
+            token, prompt_text, aspect_ratio, resolution, ts_token, model
+        )
+        if err == "TURNSTILE_INVALID":
+            _turnstile_on_skip_fail()
+            logger.info("  [Turnstile][Browser] skip 被拒，立即用 CapSolver 重试...")
+            try:
+                ts_token = _solve_turnstile()
+            except Exception as e:
+                logger.error(f"  CapSolver 重试获取失败: {e}")
+                return (status_code, None, "turnstile_capsolver_failed")
+            status_code, task_uuid, err = self._do_browser_fetch(
+                token, prompt_text, aspect_ratio, resolution, ts_token, model
+            )
+        if err == "" and task_uuid:
+            _turnstile_on_success()
+        return (status_code, task_uuid, err)
+
+    def _do_browser_fetch(self, token, prompt_text, aspect_ratio, resolution,
+                          ts_token="skip", model=MODEL_PRIMARY):
+        """在浏览器内执行 ab() 生成 x-guard-id，然后用 fetch 提交（无文件上传）"""
+        try:
+            result = self._page.evaluate("""
+                async function(args) {
+                    const {token, prompt, aspectRatio, resolution, tsToken, model} = args;
+
+                    async function G3(str) {
+                        const data = new TextEncoder().encode(str);
+                        const buf  = await crypto.subtle.digest('SHA-256', data);
+                        return Array.from(new Uint8Array(buf))
+                            .map(b => b.toString(16).padStart(2,'0')).join('');
+                    }
+                    function bm(hex) {
+                        const arr = [];
+                        for (let i = 0; i < hex.length; i += 2)
+                            arr.push(parseInt(hex.substr(i, 2), 16));
+                        return arr;
+                    }
+                    function lY(n) {
+                        return [(n>>>24)&255, (n>>>16)&255, (n>>>8)&255, n&255];
+                    }
+                    function IY(bytes) {
+                        return btoa(String.fromCharCode(...bytes))
+                            .replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
+                    }
+                    async function fY() {
+                        const KEY   = 'guard_stable_id';
+                        const VALID = /^[A-Za-z0-9_-]{22}$/;
+                        try {
+                            const cached = localStorage.getItem(KEY);
+                            if (cached && VALID.test(cached)) return cached;
+                        } catch(e) {}
+                        const rand  = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+                                          .map(b=>b.toString(16).padStart(2,'0')).join('');
+                        const ua    = navigator.userAgent || 'unknown';
+                        const sc    = (screen.width||0) + 'x' + (screen.height||0);
+                        const hash  = await G3('default:' + rand + ':' + ua + ':' + sc);
+                        const newId = IY(bm(hash)).slice(0, 22);
+                        try { localStorage.setItem(KEY, newId); } catch(e) {}
+                        return newId;
+                    }
+                    async function EY() {
+                        function G4(e) {
+                            let i = 0;
+                            const t = String(e);
+                            for (let s = 0; s < t.length; s++) i = i*31 + t.charCodeAt(s) | 0;
+                            return i >>> 0;
+                        }
+                        const parts = [
+                            navigator.userAgent,
+                            screen.width + 'x' + screen.height,
+                            screen.colorDepth,
+                            navigator.language,
+                            navigator.hardwareConcurrency || 0,
+                            Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+                        ];
+                        let combined = parts.map(p => {
+                            const l = G4(String(p)).toString(2);
+                            return G4(l).toString(16);
+                        }).join('').replace(/[.-]/g,'');
+                        return await G3(combined);
+                    }
+                    async function ab(path, method) {
+                        const stableId   = await fY();
+                        const timeBucket = Math.floor(Date.now() / 60000);
+                        const domFp      = await EY();
+                        let secretKey = '';
+                        try {
+                            const el  = document.getElementById('__nuxt');
+                            const app = el && el.__vue_app__;
+                            if (app) {
+                                const cfg = app.config.globalProperties.$config;
+                                secretKey = (cfg && cfg.public && cfg.public.antibot &&
+                                             cfg.public.antibot.secretKey) || '';
+                            }
+                        } catch(e) {}
+                        const u  = (await G3(secretKey + ':' + stableId)).slice(0, 32);
+                        const c  = await G3(path + ':' + method.toUpperCase()
+                                           + ':' + u + ':' + timeBucket + ':' + secretKey);
+                        const buf = new Uint8Array(85);
+                        buf[0] = 1;
+                        bm(u).forEach((v,i)  => buf[i+1]  = v);
+                        lY(timeBucket).forEach((v,i) => buf[i+17] = v);
+                        bm(c).forEach((v,i)  => buf[i+21] = v);
+                        bm(domFp).forEach((v,i) => buf[i+53] = v);
+                        return IY(Array.from(buf));
+                    }
+
+                    const fd = new FormData();
+                    fd.append('prompt',          prompt);
+                    fd.append('model',           model);
+                    fd.append('aspect_ratio',    aspectRatio);
+                    fd.append('output_format',   'png');
+                    fd.append('resolution',      resolution);
+                    fd.append('turnstile_token', tsToken);
+
+                    try {
+                        const guardId = await ab('/api/generate_image', 'post');
+                        const r = await fetch('https://api.geminigen.ai/api/generate_image', {
+                            method: 'POST',
+                            headers: {
+                                'authorization': 'Bearer ' + token,
+                                'x-guard-id':    guardId,
+                            },
+                            body: fd,
+                        });
+                        return {status: r.status, body: await r.text()};
+                    } catch(e) {
+                        return {status: 0, error: String(e)};
+                    }
+                }
+            """, {
+                "token": token, "prompt": prompt_text,
+                "aspectRatio": aspect_ratio, "resolution": resolution,
+                "tsToken": ts_token, "model": model,
+            })
+        except Exception as e:
+            logger.error(f"  [Browser] page.evaluate 异常: {e}")
+            return (0, None, "evaluate_error")
+
+        return self._parse_generate_response(result.get("status", 0), result.get("body", ""))
+
+    @staticmethod
+    def _parse_generate_response(status, body):
+        if status == 200:
+            try:
+                data      = json.loads(body)
+                task_uuid = data.get("uuid") or data.get("id")
+                if not task_uuid:
+                    uuids = re.findall(
+                        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                        body
+                    )
+                    task_uuid = uuids[0] if uuids else None
+                if task_uuid:
+                    logger.info(f"  UUID: {task_uuid}")
+                return (200, task_uuid, "")
+            except Exception as e:
+                logger.error(f"  解析响应失败: {e} body={body[:200]}")
+                return (200, None, "")
+        elif status == 429:
+            _trigger_rate_limit()
+            return (429, None, "RATE_LIMIT")
+        elif status in (401, 403):
+            return (status, None, "TOKEN_EXPIRED")
+        elif status == 400:
+            try:
+                err_data   = json.loads(body)
+                detail     = err_data.get("detail", {})
+                error_code = (detail.get("error_code") if isinstance(detail, dict) else "") or ""
+                if error_code == "TURNSTILE_INVALID":
+                    logger.warning("  服务端要求真实 Turnstile token")
+                    return (400, None, "TURNSTILE_INVALID")
+                if error_code == "MAX_PROCESSING_IMAGEN_EXCEEDED":
+                    logger.error(f"  HTTP 400: {body[:200]}")
+                    return (400, None, "MAX_PROCESSING_IMAGEN_EXCEEDED")
+            except: pass
+            logger.error(f"  HTTP 400: {body[:200]}")
+            return (400, None, "")
+        else:
+            error_code = ""
+            try:
+                err_data   = json.loads(body)
+                detail     = err_data.get("detail", {})
+                error_code = (detail.get("error_code") if isinstance(detail, dict) else "") or ""
+                error_msg  = (detail.get("message") if isinstance(detail, dict) else str(detail)) or body
+                if _is_image_format_error(error_code, error_msg):
+                    return (status, None, "IMAGE_FORMAT_ERROR")
+                if error_code == "TURNSTILE_INVALID":
+                    return (status, None, "TURNSTILE_INVALID")
+                ec_l = error_code.lower(); em_l = error_msg.lower()
+                if any(k in ec_l or k in em_l for k in _RATE_LIMIT_INDICATORS):
+                    _trigger_rate_limit()
+                    return (status, None, "RATE_LIMIT")
+                if "MAX_PROCESSING_IMAGEN_EXCEEDED" in str(detail):
+                    return (status, None, "MAX_PROCESSING_IMAGEN_EXCEEDED")
+            except: pass
+            logger.error(f"  HTTP {status}: {body[:200]}")
+            return (status, None, error_code)
+
+    # ── 浏览器管理 ────────────────────────────────────────────
 
     def _create_context(self):
         profile_dir    = _get_profile_dir()
@@ -677,21 +1207,20 @@ class _TokenManager(threading.Thread):
         os.makedirs(profile_dir, exist_ok=True)
         if self._pw is None:
             self._pw = sync_playwright().start()
-        logger.info(f"TokenManager: {'新建' if is_new_profile else '复用'}浏览器实例 账号={USERNAME}")
-        logger.info(f"TokenManager: Profile 目录: {profile_dir}")
+        logger.info(f"TokenManager: {'新建' if is_new_profile else '复用'}浏览器  账号={USERNAME}")
         ctx = self._pw.chromium.launch_persistent_context(
             user_data_dir=profile_dir,
             headless=HIDE_WINDOW,
             args=[
-                "--no-sandbox","--disable-blink-features=AutomationControlled",
-                "--lang=zh-CN,zh,en-US,en","--window-size=1920,1080",
-                "--disable-extensions","--disable-translate",
+                "--no-sandbox", "--disable-blink-features=AutomationControlled",
+                "--lang=zh-CN,zh,en-US,en", "--window-size=1920,1080",
+                "--disable-extensions", "--disable-translate",
             ],
             viewport={"width": 1920, "height": 1080},
             locale="zh-CN", ignore_https_errors=True,
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
             ),
         )
         ctx.add_init_script("""
@@ -699,9 +1228,10 @@ class _TokenManager(threading.Thread):
             Object.defineProperty(navigator, 'plugins',   { get: () => [1,2,3,4,5] });
             window.chrome = { runtime: {} };
         """)
+        ctx.add_init_script(_GUARD_CAPTURE_SCRIPT)
         self._context = ctx
         self._page    = ctx.pages[0] if ctx.pages else ctx.new_page()
-        logger.info("TokenManager: ✅ 浏览器实例已就绪")
+        logger.info("TokenManager: 浏览器实例已就绪")
 
     def _is_context_alive(self):
         if self._context is None or self._page is None: return False
@@ -709,19 +1239,22 @@ class _TokenManager(threading.Thread):
         except: return False
 
     def _rebuild_context(self):
-        logger.warning("TokenManager: ⚠ 浏览器连接断开，正在重建...")
+        logger.warning("TokenManager: 浏览器连接断开，正在重建...")
         for obj in [self._page, self._context]:
             if obj:
                 try: obj.close()
                 except: pass
         self._page = self._context = None
         with self._state_lock:
-            self._token = None; self._gid = None; self._token_time = 0.0
+            self._token = None; self._stable_id = None; self._token_time = 0.0
+        self._guard_gen        = None
+        self._guard_triggered  = False
+        self._guard_trigger_at = 0.0
         try:
             self._create_context()
-            logger.info("TokenManager: ✅ 浏览器重建成功")
+            logger.info("TokenManager: 浏览器重建成功")
         except Exception as e:
-            logger.error(f"TokenManager: ❌ 浏览器重建失败: {e}")
+            logger.error(f"TokenManager: 浏览器重建失败: {e}")
             self._context = self._page = None
 
     def _cleanup_browser(self):
@@ -749,28 +1282,16 @@ def _get_token_manager() -> _TokenManager:
             raise RuntimeError("TokenManager 尚未初始化，请先调用 init_login()")
         return _token_manager
 
-
-# ============================================================
-# Worker 调用的 Token 接口
-# ============================================================
 def _get_fresh_token(force_refresh=False, stale_token=None):
-    """
-    Worker 获取 Token 的唯一入口。
-    force_refresh=True  → 非阻塞，通知刷新后立即返回 None，Worker 自己 sleep 重试
-    force_refresh=False → 阻塞等待，最长 300s
-    """
     try:
         return _get_token_manager().get_token(
-            force_refresh=force_refresh,
-            stale_token=stale_token,
-            timeout=300
+            force_refresh=force_refresh, stale_token=stale_token, timeout=300
         )
     except RuntimeError as e:
         logger.error(f"_get_fresh_token: {e}")
         return None, None
 
 def _invalidate_token_cache(bad_token=None):
-    """Worker 在网络层发现 token 无效时调用（非阻塞通知）"""
     try:
         _get_token_manager().invalidate(bad_token=bad_token)
     except RuntimeError:
@@ -783,7 +1304,7 @@ def _invalidate_token_cache(bad_token=None):
 def init_login() -> bool:
     global _token_manager
     logger.info("=" * 40)
-    logger.info("初始化：启动 TokenManager，等待首次登录...")
+    logger.info("初始化：启动 TokenManager...")
     logger.info("=" * 40)
     with _token_manager_lock:
         if _token_manager is not None and _token_manager.is_alive():
@@ -792,13 +1313,12 @@ def init_login() -> bool:
         _token_manager = _TokenManager()
         _token_manager.start()
 
-    # 等待首次 token 就绪（最长 300s，含登录流程）
     if _token_manager._token_ready.wait(timeout=300):
         token, _ = _token_manager.get_token(timeout=10)
         if token:
-            logger.info("✅ 初始化完成，登录状态正常")
+            logger.info("初始化完成，登录状态正常")
             return True
-    logger.error("❌ 初始化失败：TokenManager 启动超时或登录失败")
+    logger.error("初始化失败：TokenManager 启动超时或登录失败")
     return False
 
 def quit_driver():
@@ -816,57 +1336,50 @@ def quit_driver():
 # ============================================================
 def _safe_get(url, headers, timeout=30):
     for a in range(1, NET_RETRY_COUNT + 1):
-        try: return req_lib.get(url, headers=headers, timeout=timeout)
+        try:
+            return req_lib.get(url, headers=headers, timeout=timeout,
+                               proxies={"http": None, "https": None})
         except (ReqConnectionError, Timeout, ConnectionError, OSError) as e:
             if a < NET_RETRY_COUNT:
                 logger.warning(f"  网络错误(GET第{a}次): {type(e).__name__}, {NET_RETRY_DELAY}s后重试...")
                 time.sleep(NET_RETRY_DELAY)
             else: raise
 
-def _safe_post_json(url, json_data, timeout=30):
-    for a in range(1, NET_RETRY_COUNT + 1):
-        try: return req_lib.post(url, json=json_data, timeout=timeout)
-        except (ReqConnectionError, Timeout, ConnectionError, OSError) as e:
-            if a < NET_RETRY_COUNT:
-                logger.warning(f"  网络错误(POST第{a}次): {type(e).__name__}, {NET_RETRY_DELAY}s后重试...")
-                time.sleep(NET_RETRY_DELAY)
-            else: raise
-
-def _safe_post_files(url, headers, files, timeout=120):
-    for a in range(1, NET_RETRY_COUNT + 1):
-        try: return req_lib.post(url, headers=headers, files=files, timeout=timeout)
-        except (ReqConnectionError, Timeout, ConnectionError, OSError) as e:
-            if a < NET_RETRY_COUNT:
-                logger.warning(f"  网络错误(上传第{a}次): {type(e).__name__}, {NET_RETRY_DELAY}s后重试...")
-                time.sleep(NET_RETRY_DELAY)
-                for _, ft in files:
-                    fobj = ft[1] if isinstance(ft, tuple) else ft
-                    if hasattr(fobj, "seek"): fobj.seek(0)
-            else: raise
-
-def _build_headers(token, gid=""):
+def _build_headers(token, guard_id=""):
     h = {
         "accept":             "*/*",
         "accept-language":    "zh-CN,zh;q=0.9",
         "authorization":      f"Bearer {token}",
         "origin":             "https://geminigen.ai",
         "referer":            "https://geminigen.ai/",
-        "sec-ch-ua":          '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+        "sec-ch-ua":          '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
         "sec-ch-ua-mobile":   "?0",
         "sec-ch-ua-platform": '"Windows"',
         "sec-fetch-dest":     "empty",
         "sec-fetch-mode":     "cors",
         "sec-fetch-site":     "same-site",
-        "user-agent":         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36",
+        "user-agent":         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
     }
-    if gid: h["x-guard-id"] = gid
+    if guard_id:
+        h["x-guard-id"] = guard_id
     return h
 
 
 # ============================================================
-# CapSolver（纯 HTTP，任意线程可调用）
+# CapSolver
 # ============================================================
 def _solve_turnstile():
+    def _post_json(url, payload):
+        for a in range(1, NET_RETRY_COUNT + 1):
+            try:
+                return req_lib.post(url, json=payload, timeout=30,
+                                    proxies={"http": None, "https": None})
+            except (ReqConnectionError, Timeout, ConnectionError, OSError) as e:
+                if a < NET_RETRY_COUNT:
+                    time.sleep(NET_RETRY_DELAY)
+                else:
+                    raise
+
     for attempt in range(1, CAPSOLVER_MAX_RETRY + 1):
         try:
             logger.info(f"  CapSolver（第{attempt}次）...")
@@ -878,21 +1391,21 @@ def _solve_turnstile():
                     "websiteKey": TURNSTILE_SITEKEY,
                 },
             }
-            resp   = _safe_post_json("https://api.capsolver.com/createTask", payload, timeout=30)
+            resp   = _post_json("https://api.capsolver.com/createTask", payload)
             result = resp.json()
             if result.get("errorId", 0) != 0:
                 raise RuntimeError(f"创建失败: {result.get('errorDescription')}")
             task_id = result["taskId"]
             for i in range(60):
                 time.sleep(3)
-                resp = _safe_post_json(
+                resp = _post_json(
                     "https://api.capsolver.com/getTaskResult",
-                    {"clientKey": CAPSOLVER_API_KEY, "taskId": task_id}, timeout=30
+                    {"clientKey": CAPSOLVER_API_KEY, "taskId": task_id}
                 )
                 r = resp.json()
                 if r.get("status") == "ready":
                     token = r["solution"]["token"]
-                    logger.info(f"  ✅ Turnstile 已解决 ({len(token)}字符)"); return token
+                    logger.info(f"  Turnstile 已解决 ({len(token)}字符)"); return token
                 elif r.get("status") == "failed":
                     raise RuntimeError(f"失败: {r.get('errorDescription', r.get('errorCode'))}")
                 elif r.get("status") == "processing":
@@ -902,121 +1415,92 @@ def _solve_turnstile():
             raise RuntimeError("超时")
         except Exception as e:
             logger.warning(f"  CapSolver 第{attempt}次失败: {e}")
-            if attempt < CAPSOLVER_MAX_RETRY: rsleep(3.0, 5.0)
+            if attempt < CAPSOLVER_MAX_RETRY: time.sleep(random.uniform(3.0, 5.0))
             else: raise
 
 
 # ============================================================
-# API 提交
+# Python HTTP 提交（GuardIdGenerator 就绪时使用）
 # ============================================================
-def _api_generate(token, gid, product_image, turnstile_token, prompt_text,
-                  model="nano-banana-2", aspect_ratio="1:1", resolution="1K",
-                  scene_photo=None):
+def _api_generate_http(token, guard_id, turnstile_token, prompt_text,
+                       aspect_ratio="1:1", resolution="1K", model=MODEL_PRIMARY):
     url     = f"{API_BASE}/generate_image"
-    headers = _build_headers(token, gid)
-    logger.info(f"  纵横比: {aspect_ratio}  分辨率: {resolution}")
+    headers = _build_headers(token, guard_id)
+    logger.info(f"  [Python] ratio={aspect_ratio}  res={resolution}  model={model}  guard={guard_id[:20]}...")
 
-    fields = [
-        ("prompt",          (None, prompt_text)),
-        ("model",           (None, model)),
-        ("aspect_ratio",    (None, aspect_ratio)),
-        ("output_format",   (None, "png")),
-        ("resolution",      (None, resolution)),
-        ("turnstile_token", (None, turnstile_token)),
-    ]
-    file_handles = []
-    img_paths = [scene_photo, product_image] if scene_photo else [product_image]
-    for img_path in img_paths:
-        fname = os.path.basename(img_path)
-        mime  = mimetypes.guess_type(img_path)[0] or "image/png"
-        fh    = open(img_path, "rb")
-        file_handles.append(fh)
-        fields.append(("files", (fname, fh, mime)))
-    try:
-        resp = _safe_post_files(url, headers, fields, timeout=120)
-    finally:
-        for fh in file_handles: fh.close()
+    data = {
+        "prompt":          prompt_text,
+        "model":           model,
+        "aspect_ratio":    aspect_ratio,
+        "output_format":   "png",
+        "resolution":      resolution,
+        "turnstile_token": turnstile_token,
+    }
+    for a in range(1, NET_RETRY_COUNT + 1):
+        try:
+            resp = req_lib.post(url, headers=headers, data=data, timeout=120,
+                                proxies={"http": None, "https": None})
+            break
+        except (ReqConnectionError, Timeout, ConnectionError, OSError) as e:
+            if a < NET_RETRY_COUNT:
+                logger.warning(f"  网络错误(第{a}次): {e}, 重试...")
+                time.sleep(NET_RETRY_DELAY)
+            else:
+                raise
 
     logger.info(f"  API响应: HTTP {resp.status_code}")
-    if resp.status_code == 200:
-        data      = resp.json()
-        logger.info(f"  {json.dumps(data, ensure_ascii=False)[:150]}")
-        task_uuid = data.get("uuid")
-        if not task_uuid:
-            uuids = re.findall(
-                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
-                json.dumps(data)
-            )
-            task_uuid = uuids[0] if uuids else None
-        if task_uuid: logger.info(f"  ✅ UUID: {task_uuid}")
-        return resp.status_code, task_uuid, ""
-    else:
-        error_code = ""
-        try:
-            err_data   = resp.json()
-            error_code = err_data.get("detail", {}).get("error_code", "")
-            error_msg  = err_data.get("detail", {}).get("message", "") or resp.text
-            if _is_image_format_error(error_code, error_msg):
-                logger.error(f"  ❌ 图片格式/解析错误: code={error_code}")
-                return resp.status_code, None, "IMAGE_FORMAT_ERROR"
-        except: pass
-        logger.error(f"  ❌ HTTP {resp.status_code}: {resp.text[:200]}")
-        return resp.status_code, None, error_code
+    return _TokenManager._parse_generate_response(resp.status_code, resp.text)
 
 
 # ============================================================
-# API 轮询 + 下载
+# 轮询 + 下载结果
 # ============================================================
 def _api_poll_and_download(task_uuid, save_path):
     event = _register_task(task_uuid)
     consecutive_net_errors = 0
     try:
         start = time.time(); got_4xx = False
-        current_token = current_gid = None
-        stale_token_to_report = None
+        current_token = stale_token_to_report = None
 
         while time.time() - start < GENERATE_TIMEOUT:
             elapsed = int(time.time() - start)
 
-            # 检查其他 Worker 是否已发现结果
             if event.is_set():
                 result = _get_task_result(task_uuid)
                 if result:
                     if result["status"] == 2 and result["thumbnail_url"]:
-                        logger.info("  ✅ 生成完成（被其他 worker 发现）!")
-                        dl_ok = _download_image(result["thumbnail_url"], save_path)
-                        return (dl_ok, result["thumbnail_url"], "")
+                        logger.info("  生成完成（被其他 worker 发现）!")
+                        return (_download_image(result["thumbnail_url"], save_path),
+                                result["thumbnail_url"], "")
                     elif result["status"] == 3:
                         ec = result.get("error_code", "") or ""
                         em = result.get("error_message", "") or ""
-                        logger.error(f"  ❌ 任务失败: {ec} - {em}")
+                        logger.error(f"  任务失败: {ec} - {em}")
                         if _is_image_format_error(ec, em): return (False, None, "IMAGE_FORMAT_ERROR")
                         return (False, None, "")
 
-            # 获取 token
             if got_4xx:
-                # 非阻塞通知刷新，自己 sleep 等一会儿
                 _get_fresh_token(force_refresh=True, stale_token=stale_token_to_report)
-                got_4xx = False
-                stale_token_to_report = None
-                logger.info("  Token 失效已通知 TokenManager，等待15s后重新获取...")
+                got_4xx = False; stale_token_to_report = None
+                logger.info("  Token 失效已通知，等待15s后重新获取...")
                 time.sleep(15)
-                current_token, current_gid = _get_fresh_token()   # 阻塞等新 token
+                current_token, _ = _get_fresh_token()
             else:
-                current_token, current_gid = _get_fresh_token()
+                current_token, _ = _get_fresh_token()
 
             if not current_token:
                 logger.error("  无法获取 token，等待15秒后重试...")
                 time.sleep(15); consecutive_net_errors += 1
                 if consecutive_net_errors >= 5:
-                    logger.error("  ❌ 连续5次无法获取 token，放弃")
+                    logger.error("  连续5次无法获取 token，放弃")
                     return (False, None, "")
                 continue
             else:
                 consecutive_net_errors = 0
 
             try:
-                headers     = _build_headers(current_token, current_gid)
+                guard_id = _get_token_manager().get_guard_id("/api/histories", "get")
+                headers  = _build_headers(current_token, guard_id)
                 all_results = []; found_task = False
                 for page_num in range(1, 4):
                     resp = _safe_get(
@@ -1037,12 +1521,11 @@ def _api_poll_and_download(task_uuid, save_path):
                                 if status == 2:
                                     thumb_url = item.get("thumbnail_url")
                                     if thumb_url:
-                                        dl_ok = _download_image(thumb_url, save_path)
-                                        return (dl_ok, thumb_url, "")
+                                        return (_download_image(thumb_url, save_path), thumb_url, "")
                                 elif status == 3:
                                     ec = item.get("error_code", "") or ""
                                     em = item.get("error_message", "") or ""
-                                    logger.error(f"  ❌ 任务失败: {ec} - {em}")
+                                    logger.error(f"  任务失败: {ec} - {em}")
                                     if _is_image_format_error(ec, em):
                                         return (False, None, "IMAGE_FORMAT_ERROR")
                                     return (False, None, "")
@@ -1052,7 +1535,7 @@ def _api_poll_and_download(task_uuid, save_path):
                     elif resp.status_code in (401, 403):
                         stale_token_to_report = current_token
                         got_4xx = True
-                        logger.warning(f"  [{elapsed}s] HTTP {resp.status_code}，token 失效，将刷新")
+                        logger.warning(f"  [{elapsed}s] HTTP {resp.status_code}，token 失效")
                         break
                     elif resp.status_code in (500, 502, 503):
                         logger.warning(f"  [{elapsed}s] HTTP {resp.status_code} 服务器故障"); break
@@ -1064,12 +1547,11 @@ def _api_poll_and_download(task_uuid, save_path):
                 consecutive_net_errors += 1
                 logger.warning(f"  [{elapsed}s] 轮询异常({consecutive_net_errors}次): {e}")
                 if consecutive_net_errors >= 3:
-                    logger.warning("  连续异常，失效 token 缓存，等待30秒...")
                     _invalidate_token_cache(bad_token=current_token)
                     time.sleep(30); consecutive_net_errors = 0
             event.wait(timeout=API_POLL_INTERVAL)
 
-        logger.error(f"  ❌ 超时 ({GENERATE_TIMEOUT}s)")
+        logger.error(f"  超时 ({GENERATE_TIMEOUT}s)")
         return (False, None, "")
     finally:
         _unregister_task(task_uuid)
@@ -1080,59 +1562,62 @@ def _download_image(url, save_path):
     try:
         headers = {
             "Referer":    "https://geminigen.ai/",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/145 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/147 Safari/537.36"
         }
         resp = _safe_get(url, headers=headers, timeout=60)
         resp.raise_for_status()
         with open(save_path, "wb") as f:
             for chunk in resp.iter_content(chunk_size=8192): f.write(chunk)
         size_mb = os.path.getsize(save_path) / 1024 / 1024
-        logger.info(f"  ✅ 已保存: {save_path} ({size_mb:.1f}MB)")
+        logger.info(f"  已保存: {save_path} ({size_mb:.1f}MB)")
         return True
     except Exception as e:
-        logger.error(f"  ❌ 下载失败: {e}")
+        logger.error(f"  下载失败: {e}")
         return False
 
 
 # ============================================================
 # 对外主接口
 # ============================================================
-def run_task(product_image, save_path, prompt_text, model="nano-banana-2",
-            aspect_ratio="1:1", resolution="1K", scene_photo=None):
+def run_task(save_path, prompt_text, model=MODEL_PRIMARY,
+             aspect_ratio="1:1", resolution="1K"):
+    """
+    提交一个图片生成任务并等待结果。
+    save_path:    生成结果图片的本地保存路径
+    prompt_text:  用户的文字描述
+    model:        nano-banana-2 或 nano-banana-pro
+    aspect_ratio: 1:1 / 16:9 / 9:16 / 3:4 / 4:3
+    resolution:   1K / 2K / 4K
+    返回: (success: bool, thumbnail_url: str|None, error_type: str)
+    """
     MAX_SUBMIT_RETRY = 10
     QUEUE_FULL_WAIT  = 30
     try:
         task_uuid = None
         for submit_attempt in range(1, MAX_SUBMIT_RETRY + 1):
 
-            # ── 获取 token ──
-            logger.info("▷ 获取 Token...")
-            token, gid = _get_fresh_token()
+            _check_model_auto_revert()
+            current_model = model or _get_current_model()
+
+            jitter = random.uniform(SUBMIT_JITTER_MIN, SUBMIT_JITTER_MAX)
+            logger.info(f"  提交前错峰等待 {jitter:.1f}s...")
+            time.sleep(jitter)
+
+            _wait_for_rate_limit()
+
+            token, _ = _get_fresh_token()
             if not token:
                 logger.error("  Token 获取失败，等待10秒重试...")
                 time.sleep(10); continue
 
-            # ── 解 Turnstile ──
-            logger.info("▷ 解 Turnstile...")
+            logger.info(f"提交任务  ratio={aspect_ratio}  res={resolution}  model={current_model}  attempt={submit_attempt}/{MAX_SUBMIT_RETRY}")
             try:
-                turnstile_token = _solve_turnstile()
-            except Exception as e:
-                if _is_network_error(e):
-                    logger.warning("  Turnstile 网络错误，等10秒重试...")
-                    _invalidate_token_cache(); time.sleep(10); continue
-                logger.error(f"  Turnstile 失败: {e}")
-                return (False, None, "")
-
-            # ── 提交 ──
-            logger.info("▷ API 提交...")
-            try:
-                status_code, task_uuid, submit_error = _api_generate(
-                    token, gid, product_image, turnstile_token, prompt_text, model,
-                    aspect_ratio, resolution, scene_photo
+                status_code, task_uuid, submit_error = _get_token_manager().submit_generate(
+                    prompt_text, aspect_ratio, resolution, model=current_model
                 )
             except Exception as e:
                 if _is_network_error(e):
-                    logger.warning(f"  API 提交网络错误，等10秒重试（第{submit_attempt}次）...")
+                    logger.warning(f"  网络错误，等10秒重试（第{submit_attempt}次）...")
                     _invalidate_token_cache(); time.sleep(10); continue
                 raise
 
@@ -1141,55 +1626,54 @@ def run_task(product_image, save_path, prompt_text, model="nano-banana-2",
             if task_uuid:
                 break
 
+            if submit_error == "RATE_LIMIT":
+                logger.warning("  限速，等待冷却后重试...")
+                _wait_for_rate_limit(); continue
+
             if submit_error == "MAX_PROCESSING_IMAGEN_EXCEEDED":
-                logger.warning(
-                    f"  ⏳ 队列已满，等{QUEUE_FULL_WAIT}秒"
-                    f"（第{submit_attempt}/{MAX_SUBMIT_RETRY}次）..."
-                )
+                _on_model_rate_limited()
+                current_model = _get_current_model()
+                logger.warning(f"  并发超限，切换为 {current_model}，等{QUEUE_FULL_WAIT}s...")
                 time.sleep(QUEUE_FULL_WAIT); continue
 
             if status_code in (401, 403):
                 logger.info("  Token 过期，通知刷新后重试...")
-                # 非阻塞通知
                 _get_fresh_token(force_refresh=True, stale_token=token)
-                logger.info("  等待15秒后重新获取 token...")
                 time.sleep(15)
-                # 阻塞等新 token
-                token, gid = _get_fresh_token()
+                token, _ = _get_fresh_token()
                 if not token: time.sleep(10); continue
+                _check_model_auto_revert()
+                current_model = model or _get_current_model()
                 try:
-                    turnstile_token = _solve_turnstile()
-                except: continue
-                try:
-                    status_code, task_uuid, submit_error = _api_generate(
-                        token, gid, product_image, turnstile_token, prompt_text, model,
-                    aspect_ratio, resolution, scene_photo
+                    status_code, task_uuid, submit_error = _get_token_manager().submit_generate(
+                        prompt_text, aspect_ratio, resolution, model=current_model
                     )
                 except Exception as e:
                     if _is_network_error(e):
                         _invalidate_token_cache(); time.sleep(10); continue
                     raise
-                if submit_error == "IMAGE_FORMAT_ERROR":
-                    return (False, None, "IMAGE_FORMAT_ERROR")
+                if submit_error == "IMAGE_FORMAT_ERROR": return (False, None, "IMAGE_FORMAT_ERROR")
                 if task_uuid: break
+                if submit_error == "RATE_LIMIT":
+                    _wait_for_rate_limit(); continue
                 if submit_error == "MAX_PROCESSING_IMAGEN_EXCEEDED":
+                    _on_model_rate_limited()
+                    current_model = _get_current_model()
+                    logger.warning(f"  并发超限，切换为 {current_model}，等{QUEUE_FULL_WAIT}s...")
                     time.sleep(QUEUE_FULL_WAIT); continue
 
-            logger.warning(
-                f"  提交失败(HTTP {status_code})，等10秒重试（第{submit_attempt}次）..."
-            )
+            logger.warning(f"  提交失败(HTTP {status_code})，等10秒重试...")
             time.sleep(10)
 
         if not task_uuid:
             logger.error(f"  提交重试{MAX_SUBMIT_RETRY}次后仍失败")
             return (False, None, "")
 
-        logger.info("▷ 等待结果...")
+        logger.info("等待结果...")
         return _api_poll_and_download(task_uuid, save_path)
 
     except Exception as e:
         logger.error(f"任务异常: {e}")
         traceback.print_exc()
-        if _is_network_error(e):
-            _invalidate_token_cache()
+        if _is_network_error(e): _invalidate_token_cache()
         return (False, None, "")
