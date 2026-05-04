@@ -17,6 +17,8 @@ from .routers import auth, generate, balance, apikeys
 from .config import HOST, PORT
 from . import database as db
 
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",") if os.getenv("CORS_ORIGINS") else ["*"]
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
@@ -37,6 +39,12 @@ async def _cleanup_loop():
                 logger.info(f"定时清理：已删除 {n} 条 7 天前的任务记录")
         except Exception as e:
             logger.error(f"定时清理失败: {e}")
+        # 清理内存中的 IP 限流计数，防止无限增长
+        now = time.time()
+        for ip in list(_ip_requests):
+            _ip_requests[ip] = [t for t in _ip_requests[ip] if now - t < 60]
+            if not _ip_requests[ip]:
+                del _ip_requests[ip]
         await asyncio.sleep(24 * 3600)
 
 
@@ -77,9 +85,10 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=CORS_ORIGINS != ["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # ── IP 限流中间件（针对 /auth/ 接口）────────────────────────
