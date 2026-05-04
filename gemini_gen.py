@@ -333,6 +333,7 @@ def _extract_token_from_browser(page):
                 })()
             """)
             token = data.get("access_token", ""); gid = data.get("guard_id", "")
+            logger.info(f"  提取结果: token={'有' if token else '空'}  gid={'有('+gid[:20]+')' if gid else '空'}")
             if token: return token, gid
             logger.warning(f"  提取第{attempt+1}次: token 为空")
             rsleep(3.0, 5.0)
