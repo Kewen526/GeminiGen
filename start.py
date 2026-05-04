@@ -1,20 +1,30 @@
 # -*- coding: utf-8 -*-
 """
-Kewen AI Pipeline - 多进程启动器
-====================================
-在此处填写账号，每组账号启动一个独立进程（独立浏览器）。
-一台机器跑两个账号就填两组，三个就填三组。
+GeminiGen Worker 多账号启动器
+==============================
+从 .env 读取账号配置，为每个账号启动独立的 worker_standalone.py 进程。
 
-用法：
+.env 配置示例（多账号）:
+    GEMINIGEN_ACCOUNTS=account1@gmail.com:password1,account2@gmail.com:password2
+
+.env 配置示例（单账号）:
+    GEMINIGEN_USERNAME=account@gmail.com
+    GEMINIGEN_PASSWORD=yourpassword
+
+用法:
     python start.py
 """
+
+from __future__ import annotations
 
 import os
 import sys
 import time
-import subprocess
 import signal
 import logging
+import pathlib
+import subprocess
+import threading
 
 logging.basicConfig(
     level=logging.INFO,
@@ -23,94 +33,101 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ============================================================
-# 👇 在这里填写账号密码（有几组就填几组）
-# ============================================================
-ACCOUNTS = [
-    {"username": "kewen789456@gmail.com",       "password": "Kewen888@"},
-    {"username": "hailingchen85@gmail.com",      "password": "Mima123456"},
-    {"username": "wenwenc033@gmail.com",         "password": "MIma123456!"},
-    {"username": "wangjingqing359@gmail.com",    "password": "Mima123456"},
-]
-# ============================================================
+SCRIPT_DIR    = pathlib.Path(__file__).parent
+WORKER_SCRIPT = str(SCRIPT_DIR / "worker_standalone.py")
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MAIN_LOOP  = os.path.join(SCRIPT_DIR, "main_loop.py")
+# ── 加载 .env ──────────────────────────────────────────────────
+_env_path = SCRIPT_DIR / ".env"
+if _env_path.exists():
+    for _line in _env_path.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
 
 
-def main():
-    if not ACCOUNTS:
-        logger.error("❌ ACCOUNTS 为空，请至少填写一组账号")
-        sys.exit(1)
+def _load_accounts() -> list[dict]:
+    accounts_str = os.environ.get("GEMINIGEN_ACCOUNTS", "").strip()
+    if accounts_str:
+        accounts = []
+        for entry in accounts_str.split(","):
+            entry = entry.strip()
+            if ":" in entry:
+                u, _, p = entry.partition(":")
+                accounts.append({"username": u.strip(), "password": p.strip()})
+        return accounts
+    # 单账号降级
+    u = os.environ.get("GEMINIGEN_USERNAME", "").strip()
+    p = os.environ.get("GEMINIGEN_PASSWORD", "").strip()
+    if u and p:
+        return [{"username": u, "password": p}]
+    return []
 
-    logger.info("=" * 60)
-    logger.info(f"Kewen AI Pipeline 启动器 — 共 {len(ACCOUNTS)} 个账号")
-    logger.info("=" * 60)
 
-    processes = []
+def _start_process(idx: int, account: dict) -> subprocess.Popen:
+    cmd = [
+        sys.executable, WORKER_SCRIPT,
+        "--username", account["username"],
+        "--password", account["password"],
+        "--instance", str(idx),
+    ]
+    log_path = SCRIPT_DIR / f"worker_{idx}.log"
+    log_file = open(log_path, "a", encoding="utf-8")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+        universal_newlines=True,
+        encoding="utf-8",
+        cwd=str(SCRIPT_DIR),
+    )
+    logger.info(f"进程 #{idx} 已启动  账号: {account['username']}  PID={proc.pid}  日志: worker_{idx}.log")
 
-    for idx, account in enumerate(ACCOUNTS):
-        username = account["username"]
-        password = account["password"]
-        logger.info(f"启动进程 #{idx}  账号: {username}")
-
-        cmd = [
-            sys.executable, MAIN_LOOP,
-            "--idx",      str(idx),
-            "--username", username,
-            "--password", password,
-        ]
-
-        # 每个进程使用独立的日志文件（stdout重定向到 pipeline_N.log，同时也在控制台显示）
-        log_path = os.path.join(SCRIPT_DIR, f"pipeline_{idx}.log")
-        log_file = open(log_path, "a", encoding="utf-8")
-
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-            universal_newlines=True,
-            encoding="utf-8",
-        )
-        processes.append({"proc": proc, "idx": idx, "log": log_file, "username": username})
-        logger.info(f"  ✅ 进程 #{idx} PID={proc.pid}  日志: pipeline_{idx}.log")
-
-        # 两个进程之间错开5秒，避免同时抢Chrome资源
-        if idx < len(ACCOUNTS) - 1:
-            time.sleep(5)
-
-    logger.info(f"全部 {len(processes)} 个进程已启动，Ctrl+C 可终止所有进程")
-    logger.info("=" * 60)
-
-    # ── 转发各子进程输出到控制台 + 独立日志文件 ──
-    import threading
-
-    def pipe_output(entry):
-        proc    = entry["proc"]
-        idx     = entry["idx"]
-        log_f   = entry["log"]
-        prefix  = f"[进程#{idx}]"
+    def _pipe(proc: subprocess.Popen, log_file, prefix: str):
         try:
             for line in proc.stdout:
                 line = line.rstrip("\n")
                 print(f"{prefix} {line}", flush=True)
-                log_f.write(line + "\n")
-                log_f.flush()
+                log_file.write(line + "\n")
+                log_file.flush()
         except Exception:
             pass
         finally:
-            log_f.close()
+            log_file.close()
 
-    threads = []
-    for entry in processes:
-        t = threading.Thread(target=pipe_output, args=(entry,), daemon=True)
-        t.start()
-        threads.append(t)
+    threading.Thread(
+        target=_pipe,
+        args=(proc, log_file, f"[#{idx}]"),
+        daemon=True,
+    ).start()
+    return proc
 
-    # ── 等待并监控进程 ──
-    def terminate_all(signum=None, frame=None):
-        logger.info("\n收到中断信号，正在终止所有子进程...")
+
+def main():
+    accounts = _load_accounts()
+    if not accounts:
+        logger.error("未找到账号配置！请在 .env 中设置：")
+        logger.error("  多账号: GEMINIGEN_ACCOUNTS=email1:pass1,email2:pass2")
+        logger.error("  单账号: GEMINIGEN_USERNAME=email  GEMINIGEN_PASSWORD=pass")
+        input("\n按 Enter 退出...")
+        sys.exit(1)
+
+    logger.info("=" * 60)
+    logger.info(f"GeminiGen Worker 启动器 — 共 {len(accounts)} 个账号")
+    logger.info("=" * 60)
+
+    processes: list[dict] = []
+    for idx, account in enumerate(accounts):
+        proc = _start_process(idx, account)
+        processes.append({"proc": proc, "idx": idx, "account": account})
+        if idx < len(accounts) - 1:
+            time.sleep(5)  # 错开启动，避免同时争抢浏览器资源
+
+    logger.info(f"全部 {len(processes)} 个进程已启动，按 Ctrl+C 终止")
+
+    def _terminate_all(signum=None, frame=None):
+        logger.info("收到停止信号，正在终止所有子进程...")
         for entry in processes:
             try:
                 entry["proc"].terminate()
@@ -122,52 +139,25 @@ def main():
                 entry["proc"].kill()
             except Exception:
                 pass
-        logger.info("所有子进程已终止")
+        logger.info("全部已终止")
         sys.exit(0)
 
-    signal.signal(signal.SIGINT,  terminate_all)
-    signal.signal(signal.SIGTERM, terminate_all)
+    signal.signal(signal.SIGINT,  _terminate_all)
+    signal.signal(signal.SIGTERM, _terminate_all)
 
     try:
         while True:
             time.sleep(5)
             for entry in processes:
-                ret = entry["proc"].poll()
-                if ret is not None:
+                if entry["proc"].poll() is not None:
                     logger.warning(
-                        f"⚠ 进程 #{entry['idx']} ({entry['username']}) "
-                        f"意外退出，退出码={ret}，10秒后重启..."
+                        f"进程 #{entry['idx']} ({entry['account']['username']}) "
+                        f"意外退出，10秒后重启..."
                     )
                     time.sleep(10)
-                    # 重启该进程
-                    idx      = entry["idx"]
-                    username = entry["username"]
-                    password = next(
-                        a["password"] for a in ACCOUNTS if a["username"] == username
-                    )
-                    cmd = [
-                        sys.executable, MAIN_LOOP,
-                        "--idx",      str(idx),
-                        "--username", username,
-                        "--password", password,
-                    ]
-                    log_path = os.path.join(SCRIPT_DIR, f"pipeline_{idx}.log")
-                    log_file = open(log_path, "a", encoding="utf-8")
-                    proc = subprocess.Popen(
-                        cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        bufsize=1,
-                        universal_newlines=True,
-                        encoding="utf-8",
-                    )
-                    entry["proc"] = proc
-                    entry["log"]  = log_file
-                    logger.info(f"  ✅ 进程 #{idx} 已重启，PID={proc.pid}")
-                    t = threading.Thread(target=pipe_output, args=(entry,), daemon=True)
-                    t.start()
+                    entry["proc"] = _start_process(entry["idx"], entry["account"])
     except KeyboardInterrupt:
-        terminate_all()
+        _terminate_all()
 
 
 if __name__ == "__main__":

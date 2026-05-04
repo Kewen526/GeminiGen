@@ -1,53 +1,67 @@
 # -*- coding: utf-8 -*-
 """
-GeminiGen 平台 — 独立 Worker
+GeminiGen 平台 — 本地 Worker
 ==============================
 在本地电脑运行，连接服务器数据库，自动领取并处理生成任务。
 
-使用方式：
-  Windows: 双击 start_worker.bat
-  手动启动: python worker_standalone.py
+启动方式：
+  python start.py          （推荐，多账号自动管理）
+  python worker_standalone.py --username xxx@gmail.com --password xxx
 
-依赖安装:
-  pip install -r requirements_worker.txt
-  playwright install chromium
+配置：在同目录 .env 文件中填写账号和数据库信息。
 """
 
-# ============================================================
-# ★★★ 配置区 —— 根据实际情况修改 ★★★
-# ============================================================
+from __future__ import annotations
 
-# ── 数据库（服务器上的 MySQL）────────────────────────────────
-DB_HOST     = "47.95.157.46"
-DB_PORT     = 3306
-DB_USER     = "root"
-DB_PASSWORD = "root@kunkun"
-DB_NAME     = "quote_iw"
+import os
+import sys
+import argparse
+import pathlib
 
-# ── GeminiGen 账号（用于生成图片）────────────────────────────
-ACCOUNTS = [
-    # 可配置多个账号，每个账号启动独立浏览器
-    {"username": "your_account@gmail.com", "password": "your_password"},
-    # {"username": "account2@gmail.com",    "password": "password2"},
-]
+# ── 加载 .env ──────────────────────────────────────────────────
+_env_path = pathlib.Path(__file__).with_name(".env")
+if _env_path.exists():
+    for _line in _env_path.read_text(encoding="utf-8").splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _, _v = _line.partition("=")
+            os.environ.setdefault(_k.strip(), _v.strip())
 
-# ── 并发设置 ──────────────────────────────────────────────────
-WORKER_COUNT   = 3     # 每个账号启动几个 Worker 线程
-POLL_INTERVAL  = 5     # 无任务时等待秒数
-QUALITY_CHECK  = False # 是否开启质量检测（True 更稳定但每张多30s）
+# ── 命令行参数（由 start.py 传入，或手动运行时填写）──────────
+_parser = argparse.ArgumentParser(add_help=False)
+_parser.add_argument("--username",      default="")
+_parser.add_argument("--password",      default="")
+_parser.add_argument("--instance",      type=int, default=0)
+_parser.add_argument("--worker-count",  type=int, default=0)
+_args, _ = _parser.parse_known_args()
+
+# ── 数据库配置 ─────────────────────────────────────────────────
+DB_HOST     = os.environ.get("DB_HOST",     "47.95.157.46")
+DB_PORT     = int(os.environ.get("DB_PORT", "3306"))
+DB_USER     = os.environ.get("DB_USER",     "root")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "")
+DB_NAME     = os.environ.get("DB_NAME",     "geminigen_platform")
+
+# ── GeminiGen 账号（命令行 > 环境变量）────────────────────────
+_USERNAME = _args.username or os.environ.get("GEMINIGEN_USERNAME", "")
+_PASSWORD = _args.password or os.environ.get("GEMINIGEN_PASSWORD", "")
+_INSTANCE = _args.instance
+
+# ── Worker 设置 ────────────────────────────────────────────────
+WORKER_COUNT  = _args.worker_count or int(os.environ.get("WORKER_COUNT_LOCAL", "3"))
+POLL_INTERVAL = 5
+QUALITY_CHECK = False
 
 # ── 本地路径 ──────────────────────────────────────────────────
-import os
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-SCENE_ROOT = os.path.join(SCRIPT_DIR, "商家实拍图")   # 仓库场景图目录
-TEMP_DIR   = os.path.join(SCRIPT_DIR, "worker_temp")  # 临时文件目录
-LOG_FILE   = os.path.join(SCRIPT_DIR, "worker.log")   # 日志文件
+SCRIPT_DIR = str(pathlib.Path(__file__).parent)
+SCENE_ROOT = os.path.join(SCRIPT_DIR, "商家实拍图")
+TEMP_DIR   = os.path.join(SCRIPT_DIR, "worker_temp")
+LOG_FILE   = os.path.join(SCRIPT_DIR, f"worker_{_INSTANCE}.log")
 
 # ============================================================
 # 以下无需修改
 # ============================================================
 
-import sys
 import time
 import random
 import logging
@@ -59,13 +73,8 @@ from pathlib import Path
 import pymysql
 import pymysql.cursors
 
-# 引入本目录的核心模块
 import gemini_gen
-from zhipu_classify import classify_image_sync
 from cos_upload import upload_to_cos
-if QUALITY_CHECK:
-    from score_checker import quality_check
-
 
 # ── 日志 ──────────────────────────────────────────────────────
 logging.basicConfig(
@@ -78,36 +87,6 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
-
-# ── 分类 → 场景图文件夹映射 ───────────────────────────────────
-CATEGORY_FOLDER_MAP = {
-    "包":                  "包",
-    "保健穿戴":            "保健穿戴",
-    "电子":                "电子",
-    "发饰饰品":            "发饰饰品",
-    "服饰_裤子":           "服饰_裤子",
-    "服饰_连衣裙":         "服饰_连衣裙",
-    "服饰_上衣":           "服饰_上衣",
-    "挂件":                "挂件",
-    "化妆品":              "化妆品",
-    "家居":                "家居",
-    "戒指_项链_耳钉_手链": "戒指_项链_耳钉_手链",
-    "帽子":                "帽子",
-    "内衣":                "内衣",
-    "手机壳":              "手机壳",
-    "鞋子":                "鞋子",
-    "眼镜":                "眼镜",
-    "杂物":                "杂物",
-}
-
-PROMPT_UNIFIED = (
-    "图1（仓库参考图） + 图2（电商图）"
-    " → 提取图1的场景风格 → 提取图2的商品本体（多个商品只取一件）"
-    " →还原图2商品应该在货架刚拿下来的状态"
-    " → 按照该商品实际分类还原，去除所有电商拍摄效果"
-    "（例如商品内部液体、拼装效果、漂浮效果）"
-    "按图1的陈列方式展示图2的商品"
-)
 
 _stop_event = threading.Event()
 
@@ -214,7 +193,7 @@ def fail_task(task_id, error_msg, refund=True):
 
 
 def reset_stuck_tasks(timeout_minutes=30):
-    """将卡在 processing 状态超过 N 分钟的任务重置为 pending（启动时清理）"""
+    """将卡在 processing 状态超过 N 分钟的任务重置为 pending"""
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
@@ -236,35 +215,23 @@ def reset_stuck_tasks(timeout_minutes=30):
 # ============================================================
 # 工具函数
 # ============================================================
-def get_scene_photo(category):
-    folder = CATEGORY_FOLDER_MAP.get(category)
-    if not folder:
-        # 找不到分类就随机用一个
-        folder = random.choice(list(CATEGORY_FOLDER_MAP.values()))
-
-    folder_path = os.path.join(SCENE_ROOT, folder)
-    if not os.path.isdir(folder_path):
-        # fallback：遍历找第一个有图的文件夹
-        for f in CATEGORY_FOLDER_MAP.values():
-            p = os.path.join(SCENE_ROOT, f)
-            if os.path.isdir(p):
-                folder_path = p; break
-        else:
-            raise FileNotFoundError(f"场景图目录不存在: {SCENE_ROOT}")
-
+def _get_random_scene_photo() -> str:
+    """从场景图目录随机选一张图片"""
     exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-    imgs = [str(p) for p in Path(folder_path).iterdir()
-            if p.suffix.lower() in exts and p.is_file()]
-    if not imgs:
-        raise FileNotFoundError(f"场景图文件夹为空: {folder_path}")
-
-    chosen = random.choice(imgs)
-    logger.info(f"  场景图: {os.path.basename(chosen)} [{folder}]")
+    all_imgs = []
+    if os.path.isdir(SCENE_ROOT):
+        for root, _dirs, files in os.walk(SCENE_ROOT):
+            for f in files:
+                if Path(f).suffix.lower() in exts:
+                    all_imgs.append(os.path.join(root, f))
+    if not all_imgs:
+        raise FileNotFoundError(f"场景图目录为空或不存在: {SCENE_ROOT}")
+    chosen = random.choice(all_imgs)
+    logger.info(f"  场景图: {os.path.basename(chosen)}")
     return chosen
 
 
 def download_image(url_or_path, save_path):
-    # 本地路径（服务器上传的临时文件，Worker 在同机器时直接复制）
     if not url_or_path.startswith("http"):
         if os.path.exists(url_or_path):
             import shutil
@@ -282,14 +249,14 @@ def download_image(url_or_path, save_path):
             urllib.request.install_opener(opener)
             urllib.request.urlretrieve(url_or_path, save_path)
             size_kb = os.path.getsize(save_path) / 1024
-            logger.info(f"  ✅ 图片已下载 {size_kb:.0f}KB → {os.path.basename(save_path)}")
+            logger.info(f"  图片已下载 {size_kb:.0f}KB -> {os.path.basename(save_path)}")
             return True
         except Exception as e:
             logger.warning(f"  下载第{attempt+1}次失败: {e}")
             if attempt < 2:
                 time.sleep(3)
 
-    logger.error(f"  ❌ 图片下载失败（3次）: {url_or_path[:80]}")
+    logger.error(f"  图片下载失败（3次）: {url_or_path[:80]}")
     return False
 
 
@@ -312,7 +279,7 @@ def process_task(task, worker_id):
     scene_url = task.get("scene_image_url") or ""
     prompt    = task.get("prompt_text") or ""
 
-    logger.info(f"▶ [W{worker_id}] 任务开始  task_id={task_id}  model={model}")
+    logger.info(f"[W{worker_id}] 任务开始  task_id={task_id}  model={model}")
 
     os.makedirs(TEMP_DIR, exist_ok=True)
     product_local   = os.path.join(TEMP_DIR, f"prod_{task_id}.jpg")
@@ -328,26 +295,17 @@ def process_task(task, worker_id):
             return
 
         # 2. 选场景图
+        scene_local = None
         if scene_url:
             if download_image(scene_url, scene_local_tmp):
                 scene_local = scene_local_tmp
             else:
-                logger.warning("  用户场景图下载失败，改用自动选择")
-                scene_local = None
-        else:
-            scene_local = None
+                logger.warning("  用户场景图下载失败，改用随机场景图")
 
         if not scene_local:
-            logger.info(f"  [W{worker_id}] AI 分类中...")
             try:
-                category = classify_image_sync(prod_url, "")
-                logger.info(f"  分类结果: {category}")
-            except Exception as e:
-                logger.warning(f"  分类失败({e})，使用杂物")
-                category = "杂物"
-            try:
-                scene_local = get_scene_photo(category)
-            except Exception as e:
+                scene_local = _get_random_scene_photo()
+            except FileNotFoundError as e:
                 fail_task(task_id, f"场景图获取失败: {e}")
                 cleanup(*temp_files)
                 return
@@ -360,10 +318,8 @@ def process_task(task, worker_id):
             logger.info(f"  [W{worker_id}] 生成第 {attempt}/{MAX_RETRIES} 次...")
 
             if attempt > 1:
-                # 重新选场景图
                 try:
-                    category = classify_image_sync(prod_url, "")
-                    scene_local = get_scene_photo(category)
+                    scene_local = _get_random_scene_photo()
                 except Exception:
                     pass
 
@@ -371,7 +327,7 @@ def process_task(task, worker_id):
                 scene_photo=scene_local,
                 product_image=product_local,
                 save_path=generated_local,
-                prompt_text=prompt or PROMPT_UNIFIED,
+                prompt_text=prompt,
                 model=model,
             )
 
@@ -386,17 +342,6 @@ def process_task(task, worker_id):
                     time.sleep(20)
                 continue
 
-            # 4. 质量检测（可选）
-            if QUALITY_CHECK and thumb_url:
-                logger.info(f"  [W{worker_id}] 质量检测中...")
-                passed, reason = quality_check(scene_local, prod_url, thumb_url)
-                if not passed:
-                    logger.warning(f"  质量检测不合格: {reason}（第{attempt}次）")
-                    if attempt < MAX_RETRIES:
-                        time.sleep(10)
-                    continue
-                logger.info(f"  ✅ 质量检测合格")
-
             final_url = thumb_url
             break
 
@@ -405,18 +350,18 @@ def process_task(task, worker_id):
             cleanup(*temp_files)
             return
 
-        # 5. 上传结果
+        # 4. 上传结果（失败则用直链兜底）
         cos_key    = f"platform_results/{task_id}.png"
         result_url = upload_to_cos(generated_local, cos_key)
         if not result_url:
-            result_url = final_url  # fallback：用 geminigen 直链
+            result_url = final_url
 
-        # 6. 回写成功
+        # 5. 回写成功
         finish_task(task_id, result_url)
-        logger.info(f"  ✅ [W{worker_id}] 任务完成！{result_url[:60]}")
+        logger.info(f"  [W{worker_id}] 任务完成: {result_url[:60]}")
 
     except Exception as e:
-        logger.error(f"  ❌ [W{worker_id}] 任务异常 {task_id}: {e}")
+        logger.error(f"  [W{worker_id}] 任务异常 {task_id}: {e}")
         traceback.print_exc()
         fail_task(task_id, str(e)[:400])
     finally:
@@ -442,65 +387,50 @@ def worker_loop(worker_id):
 
 
 # ============================================================
-# 启动验证
-# ============================================================
-def check_config():
-    errors = []
-    if not ACCOUNTS or not ACCOUNTS[0].get("username"):
-        errors.append("❌ 未填写 GeminiGen 账号（修改文件顶部的 ACCOUNTS 配置）")
-    if not os.path.isdir(SCENE_ROOT):
-        errors.append(f"❌ 场景图目录不存在: {SCENE_ROOT}")
-    # 验证数据库连接
-    try:
-        conn = _get_conn()
-        conn.close()
-    except Exception as e:
-        errors.append(f"❌ 数据库连接失败: {e}")
-    return errors
-
-
-# ============================================================
 # 主入口
 # ============================================================
 def main():
     logger.info("=" * 60)
-    logger.info("GeminiGen 平台 Worker 启动中...")
-    logger.info(f"脚本目录: {SCRIPT_DIR}")
-    logger.info(f"场景图目录: {SCENE_ROOT}")
-    logger.info(f"并发数: {WORKER_COUNT}  质量检测: {QUALITY_CHECK}")
+    logger.info(f"GeminiGen Worker 启动中  账号: {_USERNAME}  实例: {_INSTANCE}")
+    logger.info(f"数据库: {DB_HOST}/{DB_NAME}  Worker线程数: {WORKER_COUNT}")
     logger.info("=" * 60)
 
-    # 启动前校验
-    errors = check_config()
-    if errors:
-        for e in errors:
-            logger.error(e)
-        logger.error("配置有误，请修改 worker_standalone.py 顶部的配置区后重试")
+    if not _USERNAME or not _PASSWORD:
+        logger.error("未配置账号，请在 .env 中设置 GEMINIGEN_USERNAME/PASSWORD")
+        logger.error("或通过命令行传入: --username xxx@gmail.com --password xxx")
+        input("\n按 Enter 键退出...")
+        sys.exit(1)
+
+    # 验证数据库连接
+    try:
+        conn = _get_conn()
+        conn.close()
+        logger.info("数据库连接正常")
+    except Exception as e:
+        logger.error(f"数据库连接失败: {e}")
         input("\n按 Enter 键退出...")
         sys.exit(1)
 
     # 重置卡住的任务
     reset_stuck_tasks(timeout_minutes=30)
 
-    # 初始化 GeminiGen（支持多账号，每账号独立浏览器）
-    account = ACCOUNTS[0]
-    logger.info(f"初始化账号: {account['username']}")
-    gemini_gen.set_account(account["username"], account["password"], 0)
+    # 登录 GeminiGen
+    logger.info(f"正在登录 GeminiGen: {_USERNAME}")
+    gemini_gen.set_account(_USERNAME, _PASSWORD, _INSTANCE)
     if not gemini_gen.init_login():
-        logger.error("❌ GeminiGen 登录失败，请检查账号密码")
+        logger.error("GeminiGen 登录失败，请检查账号密码")
         input("\n按 Enter 键退出...")
         sys.exit(1)
 
-    logger.info(f"✅ 登录成功，启动 {WORKER_COUNT} 个 Worker 线程...")
+    logger.info(f"登录成功，启动 {WORKER_COUNT} 个 Worker 线程...")
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # 启动 Worker 线程
     threads = []
     for i in range(1, WORKER_COUNT + 1):
         t = threading.Thread(
             target=worker_loop,
             args=(i,),
-            name=f"W{i}",
+            name=f"W{_INSTANCE}-{i}",
             daemon=True,
         )
         t.start()
@@ -508,8 +438,7 @@ def main():
         if i < WORKER_COUNT:
             time.sleep(2)
 
-    logger.info(f"✅ 全部 {WORKER_COUNT} 个 Worker 已就绪，等待任务...")
-    logger.info("（按 Ctrl+C 停止）")
+    logger.info(f"全部 {WORKER_COUNT} 个 Worker 已就绪，等待任务...（Ctrl+C 停止）")
 
     try:
         while True:
