@@ -26,6 +26,7 @@ while _project_root in sys.path:
 
 import os          # noqa: E402
 import argparse    # noqa: E402
+import platform    # noqa: E402  — cache stdlib platform in sys.modules before project root is restored
 import requests    # noqa: E402
 import pymysql     # noqa: E402
 
