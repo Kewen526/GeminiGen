@@ -68,7 +68,6 @@ QUALITY_CHECK = False
 
 # ── 本地路径 ──────────────────────────────────────────────────
 SCRIPT_DIR = str(pathlib.Path(__file__).parent)
-SCENE_ROOT = os.path.join(SCRIPT_DIR, "商家实拍图")
 TEMP_DIR   = os.path.join(SCRIPT_DIR, "worker_temp")
 LOG_FILE   = os.path.join(SCRIPT_DIR, f"worker_{_INSTANCE}.log")
 
@@ -229,22 +228,6 @@ def reset_stuck_tasks(timeout_minutes=30):
 # ============================================================
 # 工具函数
 # ============================================================
-def _get_random_scene_photo() -> str:
-    """从场景图目录随机选一张图片"""
-    exts = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-    all_imgs = []
-    if os.path.isdir(SCENE_ROOT):
-        for root, _dirs, files in os.walk(SCENE_ROOT):
-            for f in files:
-                if Path(f).suffix.lower() in exts:
-                    all_imgs.append(os.path.join(root, f))
-    if not all_imgs:
-        raise FileNotFoundError(f"场景图目录为空或不存在: {SCENE_ROOT}")
-    chosen = random.choice(all_imgs)
-    logger.info(f"  场景图: {os.path.basename(chosen)}")
-    return chosen
-
-
 def download_image(url_or_path, save_path):
     if not url_or_path.startswith("http"):
         if os.path.exists(url_or_path):
@@ -287,62 +270,41 @@ def cleanup(*paths):
 # 核心：处理单个任务
 # ============================================================
 def process_task(task, worker_id):
-    task_id   = task["task_id"]
-    model     = task["model"]
-    prod_url  = task["product_image_url"]
-    scene_url = task.get("scene_image_url") or ""
-    prompt    = task.get("prompt_text") or ""
+    task_id      = task["task_id"]
+    model        = task["model"]
+    prod_url     = task["product_image_url"]
+    prompt       = task.get("prompt_text") or ""
+    aspect_ratio = task.get("aspect_ratio") or "1:1"
+    resolution   = task.get("resolution") or "1K"
 
-    logger.info(f"[W{worker_id}] 任务开始  task_id={task_id}  model={model}")
+    logger.info(f"[W{worker_id}] 任务开始  task_id={task_id}  model={model}  ratio={aspect_ratio}  res={resolution}")
 
     os.makedirs(TEMP_DIR, exist_ok=True)
     product_local   = os.path.join(TEMP_DIR, f"prod_{task_id}.jpg")
-    scene_local_tmp = os.path.join(TEMP_DIR, f"scene_{task_id}.jpg")
     generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.png")
-    temp_files = [product_local, scene_local_tmp, generated_local]
+    temp_files = [product_local, generated_local]
 
     try:
-        # 1. 下载商品图
-        logger.info(f"  [W{worker_id}] 下载商品图...")
+        # 1. 下载用户上传的图片
+        logger.info(f"  [W{worker_id}] 下载图片...")
         if not download_image(prod_url, product_local):
-            fail_task(task_id, "商品图下载失败")
+            fail_task(task_id, "图片下载失败")
             return
 
-        # 2. 选场景图
-        scene_local = None
-        if scene_url:
-            if download_image(scene_url, scene_local_tmp):
-                scene_local = scene_local_tmp
-            else:
-                logger.warning("  用户场景图下载失败，改用随机场景图")
-
-        if not scene_local:
-            try:
-                scene_local = _get_random_scene_photo()
-            except FileNotFoundError:
-                # 没有场景图目录时，用商品图本身作为场景图
-                logger.info("  未找到场景图目录，使用商品图作为场景图")
-                scene_local = product_local
-
-        # 3. 生成（最多 3 次）
+        # 2. 生成（最多 3 次）
         final_url   = None
         MAX_RETRIES = 3
 
         for attempt in range(1, MAX_RETRIES + 1):
             logger.info(f"  [W{worker_id}] 生成第 {attempt}/{MAX_RETRIES} 次...")
 
-            if attempt > 1:
-                try:
-                    scene_local = _get_random_scene_photo()
-                except Exception:
-                    scene_local = product_local  # fallback：用商品图
-
             success, thumb_url, error_type = gemini_gen.run_task(
-                scene_photo=scene_local,
                 product_image=product_local,
                 save_path=generated_local,
                 prompt_text=prompt,
                 model=model,
+                aspect_ratio=aspect_ratio,
+                resolution=resolution,
             )
 
             if error_type == "IMAGE_FORMAT_ERROR":

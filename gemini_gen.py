@@ -908,23 +908,24 @@ def _solve_turnstile():
 # ============================================================
 # API 提交
 # ============================================================
-def _api_generate(token, gid, scene_photo, product_image, turnstile_token, prompt_text,
-                  model="nano-banana-2"):
+def _api_generate(token, gid, product_image, turnstile_token, prompt_text,
+                  model="nano-banana-2", aspect_ratio="1:1", resolution="1K",
+                  scene_photo=None):
     url     = f"{API_BASE}/generate_image"
     headers = _build_headers(token, gid)
-    ratio   = random.choice(["3:4", "4:3"])
-    logger.info(f"  纵横比: {ratio}")
+    logger.info(f"  纵横比: {aspect_ratio}  分辨率: {resolution}")
 
     fields = [
         ("prompt",          (None, prompt_text)),
         ("model",           (None, model)),
-        ("aspect_ratio",    (None, ratio)),
+        ("aspect_ratio",    (None, aspect_ratio)),
         ("output_format",   (None, "png")),
-        ("resolution",      (None, "1K")),
+        ("resolution",      (None, resolution)),
         ("turnstile_token", (None, turnstile_token)),
     ]
     file_handles = []
-    for img_path in [scene_photo, product_image]:
+    img_paths = [scene_photo, product_image] if scene_photo else [product_image]
+    for img_path in img_paths:
         fname = os.path.basename(img_path)
         mime  = mimetypes.guess_type(img_path)[0] or "image/png"
         fh    = open(img_path, "rb")
@@ -1095,7 +1096,8 @@ def _download_image(url, save_path):
 # ============================================================
 # 对外主接口
 # ============================================================
-def run_task(scene_photo, product_image, save_path, prompt_text, model="nano-banana-2"):
+def run_task(product_image, save_path, prompt_text, model="nano-banana-2",
+            aspect_ratio="1:1", resolution="1K", scene_photo=None):
     MAX_SUBMIT_RETRY = 10
     QUEUE_FULL_WAIT  = 30
     try:
@@ -1124,7 +1126,8 @@ def run_task(scene_photo, product_image, save_path, prompt_text, model="nano-ban
             logger.info("▷ API 提交...")
             try:
                 status_code, task_uuid, submit_error = _api_generate(
-                    token, gid, scene_photo, product_image, turnstile_token, prompt_text, model
+                    token, gid, product_image, turnstile_token, prompt_text, model,
+                    aspect_ratio, resolution, scene_photo
                 )
             except Exception as e:
                 if _is_network_error(e):
@@ -1158,7 +1161,8 @@ def run_task(scene_photo, product_image, save_path, prompt_text, model="nano-ban
                 except: continue
                 try:
                     status_code, task_uuid, submit_error = _api_generate(
-                        token, gid, scene_photo, product_image, turnstile_token, prompt_text, model
+                        token, gid, product_image, turnstile_token, prompt_text, model,
+                    aspect_ratio, resolution, scene_photo
                     )
                 except Exception as e:
                     if _is_network_error(e):
