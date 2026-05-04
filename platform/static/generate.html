@@ -507,7 +507,7 @@ body {
       <span class="nav-user-name" id="navUsername"></span>
       <span class="nav-points" id="navPoints">-- 积分</span>
     </div>
-    <a href="/dashboard" class="nav-link" id="navDashLink">控制台</a>
+    <a href="/dashboard" class="nav-link hidden" id="navDashLink">控制台</a>
   </div>
 </nav>
 
@@ -846,6 +846,7 @@ function onLoggedIn() {
   document.getElementById('app').classList.remove('hidden');
   updatePointsDisplay(userInfo.points ?? Math.floor(userInfo.balance * POINTS));
   document.getElementById('navUser').classList.remove('hidden');
+  document.getElementById('navDashLink').classList.remove('hidden');
   document.getElementById('navUsername').textContent = userInfo.username || userInfo.email.split('@')[0];
   updateConcurBadge();
   loadHistory();
