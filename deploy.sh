@@ -26,27 +26,24 @@ echo ""
 # 1. 检查并安装 Python 3.10+
 # ============================================================
 info "检查 Python..."
-if command -v python3 &>/dev/null; then
-    PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-    PY_MAJOR=$(echo $PY_VER | cut -d. -f1)
-    PY_MINOR=$(echo $PY_VER | cut -d. -f2)
-    if [ "$PY_MAJOR" -ge 3 ] && [ "$PY_MINOR" -ge 10 ]; then
-        success "Python $PY_VER"
-    else
-        warn "Python $PY_VER 版本过低，需要 3.10+，尝试安装新版本..."
-        apt-get update -qq && apt-get install -y python3.11 python3.11-pip 2>/dev/null \
-            || yum install -y python311 python311-pip 2>/dev/null \
-            || error "请手动安装 Python 3.10+"
-    fi
-else
-    info "未找到 Python3，正在安装..."
-    apt-get update -qq && apt-get install -y python3 python3-pip python3-venv \
-        || yum install -y python3 python3-pip \
-        || error "Python 安装失败，请手动安装"
-fi
-
+# 优先找 python3.11 / python3.10，再降级到 python3
 BASE_PYTHON=$(command -v python3.11 || command -v python3.10 || command -v python3)
-success "使用 Python: $BASE_PYTHON"
+if [ -z "$BASE_PYTHON" ]; then
+    error "未找到 Python，请手动安装 Python 3.10+"
+fi
+PY_VER=$("$BASE_PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+PY_MAJOR=$(echo $PY_VER | cut -d. -f1)
+PY_MINOR=$(echo $PY_VER | cut -d. -f2)
+if [ "$PY_MAJOR" -ge 3 ] && [ "$PY_MINOR" -ge 10 ]; then
+    success "Python $PY_VER ($BASE_PYTHON)"
+else
+    warn "python3 版本过低($PY_VER)，尝试安装 python3.11..."
+    yum install -y python3.11 2>/dev/null || apt-get install -y python3.11 2>/dev/null || true
+    BASE_PYTHON=$(command -v python3.11 || command -v python3.10)
+    [ -z "$BASE_PYTHON" ] && error "请手动安装 Python 3.10+"
+    success "找到 $BASE_PYTHON"
+fi
+fi
 
 # ============================================================
 # 2. 创建/更新 virtualenv，隔离依赖不污染系统环境
