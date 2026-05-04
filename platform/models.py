@@ -59,6 +59,9 @@ class GenerateRequest(BaseModel):
     model: str = "nano-banana-2"
     scene_image_url: Optional[str] = None
     prompt: Optional[str] = None
+    aspect_ratio: Optional[str] = "1:1"
+    resolution: Optional[str] = "1K"
+    output_format: Optional[str] = "PNG"
 
     @field_validator("model")
     @classmethod
@@ -67,6 +70,30 @@ class GenerateRequest(BaseModel):
         if v not in allowed:
             raise ValueError(f"model 只支持: {', '.join(allowed)}")
         return v
+
+    @field_validator("aspect_ratio")
+    @classmethod
+    def valid_aspect_ratio(cls, v):
+        allowed = {"1:1", "16:9", "9:16", "3:4", "4:3"}
+        if v and v not in allowed:
+            raise ValueError(f"aspect_ratio 只支持: {', '.join(allowed)}")
+        return v or "1:1"
+
+    @field_validator("resolution")
+    @classmethod
+    def valid_resolution(cls, v):
+        allowed = {"1K", "2K", "4K"}
+        if v and v not in allowed:
+            raise ValueError(f"resolution 只支持: {', '.join(allowed)}")
+        return v or "1K"
+
+    @field_validator("output_format")
+    @classmethod
+    def valid_output_format(cls, v):
+        allowed = {"PNG", "JPEG"}
+        if v and v.upper() not in allowed:
+            raise ValueError(f"output_format 只支持: {', '.join(allowed)}")
+        return (v or "PNG").upper()
 
 
 class TaskResponse(BaseModel):

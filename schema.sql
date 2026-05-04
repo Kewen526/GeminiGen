@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS gen_tasks (
     result_image_url VARCHAR(1000),
     status           VARCHAR(20) NOT NULL DEFAULT 'pending',
     -- pending | processing | success | failed
+    aspect_ratio     VARCHAR(10) NOT NULL DEFAULT '1:1',
+    resolution       VARCHAR(10) NOT NULL DEFAULT '1K',
+    output_format    VARCHAR(10) NOT NULL DEFAULT 'PNG',
     cost             DECIMAL(10, 4),
     error_msg        VARCHAR(500),
     created_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

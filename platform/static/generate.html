@@ -3,358 +3,1703 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>生成图片 — GeminiGen</title>
-<script src="https://cdn.tailwindcss.com"></script>
+<title>AI 图像生成 — GeminiGen</title>
 <style>
-  body {
-    background:
-      radial-gradient(900px 500px at 0% -10%, rgba(99, 102, 241, .13), transparent 65%),
-      radial-gradient(700px 420px at 100% -5%, rgba(168, 85, 247, .12), transparent 60%),
-      #f8fafc;
-  }
-  .gradient-bg { background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 55%, #a855f7 100%); }
-  .glass-card { background: rgba(255,255,255,.86); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,.85); box-shadow: 0 10px 30px rgba(15, 23, 42, .07); }
-  .drop-zone { border: 1.5px dashed #c7d2fe; background: linear-gradient(180deg, #fff, #f8faff); transition: all .25s; }
-  .drop-zone.drag-over { border-color: #7c3aed; background: #f5f3ff; box-shadow: 0 0 0 6px rgba(124,58,237,.08); }
-  .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid rgba(255,255,255,.4); border-top-color: white; border-radius: 50%; animation: spin .8s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: #7c3aed; animation: pulse 1.2s ease-in-out infinite; }
-  @keyframes pulse { 0%,100%{opacity:.3;transform:scale(.8)} 50%{opacity:1;transform:scale(1)} }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #000000;
+  --surface:   #111111;
+  --surface2:  #1a1a1a;
+  --surface3:  #222222;
+  --border:    rgba(255,255,255,0.10);
+  --border2:   rgba(255,255,255,0.06);
+  --text:      #f5f5f7;
+  --text2:     #a1a1a6;
+  --text3:     #636366;
+  --accent:    #f97316;
+  --accent2:   #ea6e10;
+  --green:     #34c759;
+  --red:       #ff453a;
+  --blue:      #0a84ff;
+  --radius:    12px;
+  --radius-sm: 8px;
+  --radius-lg: 18px;
+  --font:      -apple-system, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+}
+
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ── Nav ───────────────────────────────────────────────── */
+.nav {
+  height: 52px;
+  background: rgba(0,0,0,0.85);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 100;
+}
+
+.nav-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+
+.nav-logo-icon {
+  width: 28px; height: 28px;
+  background: var(--accent);
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 13px; color: #fff;
+  letter-spacing: -0.5px;
+}
+
+.nav-logo-name {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+
+.nav-crumb {
+  color: var(--text3);
+  font-size: 15px;
+  margin-left: 6px;
+}
+
+.nav-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.nav-balance {
+  font-size: 13px;
+  color: var(--text2);
+}
+
+.nav-balance span {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.nav-link {
+  font-size: 13px;
+  color: var(--text2);
+  text-decoration: none;
+  transition: color .2s;
+}
+.nav-link:hover { color: var(--text); }
+
+/* ── Login Gate ─────────────────────────────────────────── */
+.login-gate {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg);
+}
+
+.login-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 48px 40px;
+  width: 360px;
+  text-align: center;
+}
+
+.login-card h2 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  margin-bottom: 8px;
+}
+
+.login-card p {
+  font-size: 14px;
+  color: var(--text2);
+  margin-bottom: 28px;
+}
+
+.btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 11px 24px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: background .2s, transform .1s;
+  text-decoration: none;
+  letter-spacing: -0.1px;
+}
+.btn-primary:hover { background: var(--accent2); }
+.btn-primary:active { transform: scale(0.98); }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+/* ── App Layout ─────────────────────────────────────────── */
+.app {
+  display: flex;
+  height: 100vh;
+  padding-top: 52px;
+}
+
+/* ── Left Panel ─────────────────────────────────────────── */
+.left-panel {
+  width: 360px;
+  min-width: 360px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.left-scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 16px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface3) transparent;
+}
+.left-scroll::-webkit-scrollbar { width: 4px; }
+.left-scroll::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 2px; }
+
+/* Model tabs */
+.model-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.model-tab {
+  flex: 1;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 8px;
+  cursor: pointer;
+  transition: all .2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  position: relative;
+}
+
+.model-tab:hover {
+  border-color: rgba(255,255,255,0.2);
+  background: var(--surface3);
+}
+
+.model-tab.active {
+  border-color: var(--accent);
+  background: rgba(249,115,22,0.08);
+}
+
+.model-tab-icon {
+  width: 22px; height: 22px;
+  border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.icon-nb2  { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+.icon-nbp  { background: linear-gradient(135deg, #f97316, #dc2626); }
+
+.model-tab-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-tab.active .model-tab-name { color: var(--text); }
+
+.model-badge {
+  position: absolute;
+  top: -7px; right: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 20px;
+  letter-spacing: 0.2px;
+}
+
+.model-desc {
+  font-size: 12px;
+  color: var(--text3);
+  margin-bottom: 18px;
+  padding: 0 2px;
+  line-height: 1.5;
+}
+
+/* Section label */
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text2);
+  letter-spacing: 0.2px;
+  margin-bottom: 8px;
+  display: block;
+}
+
+/* Prompt */
+.prompt-wrap {
+  margin-bottom: 18px;
+}
+
+.prompt-textarea {
+  width: 100%;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-size: 13px;
+  font-family: var(--font);
+  color: var(--text);
+  resize: none;
+  min-height: 96px;
+  transition: border-color .2s;
+  line-height: 1.5;
+}
+.prompt-textarea::placeholder { color: var(--text3); }
+.prompt-textarea:focus {
+  outline: none;
+  border-color: rgba(255,255,255,0.3);
+}
+
+/* Aspect ratio */
+.ratio-wrap { margin-bottom: 18px; }
+
+.ratio-grid {
+  display: flex;
+  gap: 6px;
+}
+
+.ratio-item {
+  flex: 1;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  transition: all .15s;
+}
+.ratio-item:hover { border-color: rgba(255,255,255,0.2); }
+.ratio-item.active {
+  border-color: var(--accent);
+  background: rgba(249,115,22,0.08);
+}
+
+.ratio-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px;
+}
+
+.ratio-box {
+  background: var(--surface3);
+  border: 1.5px solid rgba(255,255,255,0.25);
+  border-radius: 2px;
+  transition: border-color .15s;
+}
+.ratio-item.active .ratio-box { border-color: var(--accent); background: rgba(249,115,22,0.2); }
+
+.ratio-label {
+  font-size: 11px;
+  color: var(--text3);
+  font-weight: 500;
+}
+.ratio-item.active .ratio-label { color: var(--accent); }
+
+/* Format */
+.format-wrap { margin-bottom: 18px; }
+
+.format-row {
+  display: flex;
+  gap: 6px;
+}
+
+.format-item {
+  flex: 1;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: all .15s;
+}
+.format-item:hover { border-color: rgba(255,255,255,0.2); }
+.format-item.active {
+  border-color: var(--accent);
+  background: rgba(249,115,22,0.08);
+}
+
+.format-icon-box {
+  width: 36px; height: 28px;
+  background: var(--surface3);
+  border: 1.5px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+}
+.format-item.active .format-icon-box { border-color: var(--accent); background: rgba(249,115,22,0.2); }
+
+.format-icon-text {
+  font-size: 9px;
+  font-weight: 800;
+  color: var(--text2);
+  letter-spacing: 0.5px;
+}
+.format-item.active .format-icon-text { color: var(--accent); }
+
+.format-label {
+  font-size: 11px;
+  color: var(--text3);
+  font-weight: 500;
+}
+.format-item.active .format-label { color: var(--accent); }
+
+/* Resolution */
+.res-wrap { margin-bottom: 18px; }
+
+.res-row {
+  display: flex;
+  gap: 6px;
+}
+
+.res-item {
+  flex: 1;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  transition: all .15s;
+}
+.res-item:hover { border-color: rgba(255,255,255,0.2); }
+.res-item.active {
+  border-color: var(--accent);
+  background: rgba(249,115,22,0.08);
+}
+
+.res-icon {
+  width: 28px; height: 28px;
+  background: var(--surface3);
+  border: 1.5px solid rgba(255,255,255,0.2);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative;
+}
+.res-item.active .res-icon { border-color: var(--accent); background: rgba(249,115,22,0.2); }
+
+.res-icon svg { width: 14px; height: 14px; color: var(--text3); }
+.res-item.active .res-icon svg { color: var(--accent); }
+
+.res-label {
+  font-size: 11px;
+  color: var(--text3);
+  font-weight: 500;
+}
+.res-item.active .res-label { color: var(--accent); }
+
+/* Image upload */
+.upload-wrap { margin-bottom: 20px; }
+
+.upload-zone {
+  background: var(--surface2);
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 20px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .2s;
+  position: relative;
+  overflow: hidden;
+}
+.upload-zone:hover {
+  border-color: rgba(255,255,255,0.25);
+  background: var(--surface3);
+}
+.upload-zone.drag-over {
+  border-color: var(--accent);
+  background: rgba(249,115,22,0.07);
+}
+
+.upload-placeholder-icon {
+  width: 40px; height: 40px;
+  margin: 0 auto 10px;
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex; align-items: center; justify-content: center;
+}
+
+.upload-placeholder-icon svg {
+  width: 20px; height: 20px;
+  color: var(--text3);
+}
+
+.upload-placeholder-text {
+  font-size: 13px;
+  color: var(--text2);
+  font-weight: 500;
+  margin-bottom: 3px;
+}
+
+.upload-placeholder-hint {
+  font-size: 11px;
+  color: var(--text3);
+}
+
+.upload-preview {
+  display: none;
+  position: relative;
+}
+
+.upload-preview img {
+  width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+}
+
+.upload-clear {
+  position: absolute;
+  top: 6px; right: 6px;
+  width: 22px; height: 22px;
+  background: rgba(0,0,0,0.7);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px;
+  color: var(--text2);
+  transition: background .15s;
+}
+.upload-clear:hover { background: rgba(0,0,0,0.9); color: var(--text); }
+
+/* Bottom action bar */
+.bottom-bar {
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bottom-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.bottom-balance {
+  font-size: 11px;
+  color: var(--text3);
+  margin-bottom: 1px;
+}
+
+.bottom-cost {
+  font-size: 12px;
+  color: var(--text2);
+}
+
+.bottom-cost span {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.btn-generate {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 11px 22px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  transition: background .2s, transform .1s;
+  white-space: nowrap;
+  letter-spacing: -0.2px;
+}
+.btn-generate:hover { background: var(--accent2); }
+.btn-generate:active { transform: scale(0.97); }
+.btn-generate:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+.btn-arrow {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Spinner */
+.spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  display: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Right Panel ────────────────────────────────────────── */
+.right-panel {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface3) transparent;
+}
+.right-panel::-webkit-scrollbar { width: 4px; }
+.right-panel::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 2px; }
+
+/* ── Example Carousel ──────────────────────────────────── */
+.showcase {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 48px;
+  min-height: 0;
+}
+
+.showcase-header {
+  text-align: center;
+  margin-bottom: 36px;
+}
+
+.showcase-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.8px;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+
+.showcase-sub {
+  font-size: 15px;
+  color: var(--text2);
+  line-height: 1.6;
+  max-width: 480px;
+}
+
+/* Carousel */
+.carousel-wrap {
+  width: 100%;
+  max-width: 680px;
+  position: relative;
+}
+
+.carousel-viewport {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.carousel-slides {
+  display: flex;
+  transition: transform .45s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.carousel-slide {
+  min-width: 100%;
+  position: relative;
+}
+
+.slide-images {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  height: 260px;
+}
+
+.slide-img {
+  overflow: hidden;
+  position: relative;
+}
+
+.slide-gradient {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.slide-img-real {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Category badge overlay */
+.slide-cat-badge {
+  position: absolute;
+  top: 10px; right: 10px;
+  background: rgba(0,0,0,0.65);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 20px;
+  letter-spacing: 0.3px;
+}
+
+/* Prompt strip */
+.slide-prompt-strip {
+  padding: 16px 18px;
+  background: var(--surface2);
+  border-top: 1px solid var(--border);
+}
+
+.slide-prompt-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.slide-prompt-label-icon {
+  width: 18px; height: 18px;
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+}
+
+.slide-prompt-label-icon svg {
+  width: 10px; height: 10px;
+  color: var(--text2);
+}
+
+.slide-prompt-label-text {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text2);
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.slide-prompt-text {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.slide-try-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+
+.slide-category-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.btn-try {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+  display: flex; align-items: center; gap: 5px;
+  transition: background .15s;
+}
+.btn-try:hover { background: var(--accent2); }
+.btn-try svg { width: 12px; height: 12px; }
+
+/* Carousel nav */
+.carousel-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0 10px;
+  pointer-events: none;
+}
+
+.carousel-btn {
+  width: 32px; height: 32px;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+  pointer-events: all;
+  transition: background .15s;
+  font-size: 14px;
+}
+.carousel-btn:hover { background: rgba(0,0,0,0.85); }
+
+/* Dots */
+.carousel-dots {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.dot {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--surface3);
+  cursor: pointer;
+  transition: all .2s;
+}
+.dot.active {
+  background: var(--accent);
+  width: 18px;
+  border-radius: 3px;
+}
+
+/* Slide info row */
+.carousel-info {
+  text-align: center;
+  margin-top: 16px;
+}
+.carousel-info-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+  letter-spacing: -0.3px;
+}
+.carousel-info-sub {
+  font-size: 13px;
+  color: var(--text2);
+}
+
+/* ── Result panel (shown when generating/done) ──────────── */
+.result-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 48px;
+}
+
+/* Status card */
+.status-card {
+  width: 100%; max-width: 540px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 48px 32px;
+  text-align: center;
+}
+
+.pulse-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 18px;
+}
+
+.pulse-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+.pulse-dot:nth-child(2) { animation-delay: .2s; }
+.pulse-dot:nth-child(3) { animation-delay: .4s; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; transform: scale(0.75); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.status-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 8px;
+  letter-spacing: -0.3px;
+}
+
+.status-sub {
+  font-size: 13px;
+  color: var(--text2);
+  margin-bottom: 6px;
+}
+
+.status-task-id {
+  font-size: 11px;
+  color: var(--text3);
+  font-family: "SF Mono", "Fira Code", monospace;
+  margin-top: 8px;
+}
+
+/* Success card */
+.success-card {
+  width: 100%; max-width: 680px;
+}
+
+.success-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.success-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+}
+
+.success-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--green);
+}
+
+.result-image-wrap {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  margin-bottom: 16px;
+}
+
+.result-image-wrap img {
+  width: 100%;
+  display: block;
+  max-height: 520px;
+  object-fit: contain;
+}
+
+.result-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-outline {
+  flex: 1;
+  background: transparent;
+  color: var(--text);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 11px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font);
+  cursor: pointer;
+  text-align: center;
+  text-decoration: none;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  transition: border-color .2s, background .2s;
+  letter-spacing: -0.2px;
+}
+.btn-outline:hover {
+  border-color: rgba(255,255,255,0.3);
+  background: var(--surface2);
+}
+
+/* Fail card */
+.fail-card {
+  width: 100%; max-width: 540px;
+  background: var(--surface);
+  border: 1px solid rgba(255, 69, 58, 0.25);
+  border-radius: var(--radius-lg);
+  padding: 36px 32px;
+  text-align: center;
+}
+
+.fail-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.fail-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.fail-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--red);
+}
+
+.fail-msg {
+  font-size: 13px;
+  color: var(--text2);
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.fail-refund {
+  font-size: 12px;
+  color: var(--text3);
+  margin-bottom: 20px;
+}
+
+/* Utilities */
+.hidden { display: none !important; }
 </style>
 </head>
-<body class="font-sans min-h-screen text-gray-800">
+<body>
 
-<!-- 导航 -->
-<nav class="glass-card px-6 py-4 flex items-center justify-between sticky top-0 z-40">
-  <div class="flex items-center gap-4">
-    <a href="/" class="flex items-center gap-2">
-      <div class="w-8 h-8 gradient-bg rounded-lg flex items-center justify-center">
-        <span class="text-white font-bold text-sm">G</span>
-      </div>
-      <span class="font-bold text-gray-800">GeminiGen</span>
+<!-- Nav -->
+<nav class="nav">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <a href="/" class="nav-logo">
+      <div class="nav-logo-icon">G</div>
+      <span class="nav-logo-name">GeminiGen</span>
     </a>
-    <span class="text-gray-300">/</span>
-    <span class="text-gray-600 text-sm">生成图片</span>
+    <svg width="5" height="9" viewBox="0 0 5 9" fill="none" style="opacity:.3;margin:0 2px;">
+      <path d="M1 1l3 3.5L1 8" stroke="#fff" stroke-width="1.3" stroke-linecap="round"/>
+    </svg>
+    <span style="font-size:13px;color:var(--text2);">图像生成</span>
   </div>
-  <div class="flex items-center gap-4">
-    <span class="text-sm text-gray-600">余额: <span id="balanceDisplay" class="font-bold text-purple-700">加载中...</span></span>
-    <a href="/dashboard" class="text-sm text-purple-600 hover:underline">控制台</a>
+  <div class="nav-right">
+    <div class="nav-balance">余额：<span id="navBalance">加载中...</span></div>
+    <a href="/dashboard" class="nav-link">控制台</a>
   </div>
 </nav>
 
-<!-- 未登录提示 -->
-<div id="loginPrompt" class="hidden max-w-lg mx-auto mt-20 bg-white rounded-2xl shadow-md p-10 text-center">
-  <div class="text-5xl mb-4">🔐</div>
-  <h2 class="text-xl font-bold text-gray-800 mb-2">请先登录</h2>
-  <p class="text-gray-500 mb-6">前往控制台登录或注册账号</p>
-  <a href="/dashboard" class="gradient-bg text-white px-8 py-3 rounded-xl font-medium hover:opacity-90 transition inline-block">去登录</a>
+<!-- Login gate -->
+<div id="loginGate" class="login-gate hidden">
+  <div class="login-card">
+    <div style="width:40px;height:40px;background:var(--accent);border-radius:10px;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;font-weight:700;font-size:16px;color:#fff;">G</div>
+    <h2>请先登录</h2>
+    <p>前往控制台登录或注册账号，<br>即可开始生成图像。</p>
+    <a href="/dashboard" class="btn-primary" style="width:100%;justify-content:center;">前往登录</a>
+  </div>
 </div>
 
-<!-- 主内容 -->
-<div id="mainContent" class="hidden max-w-4xl mx-auto py-10 px-6">
-  <div class="grid md:grid-cols-2 gap-8">
+<!-- App -->
+<div id="app" class="app hidden">
 
-    <!-- 左：输入区 -->
-    <div class="space-y-6">
-      <h1 class="text-2xl font-bold text-gray-800">AI 图片生成</h1>
+  <!-- Left panel -->
+  <div class="left-panel">
+    <div class="left-scroll" id="leftScroll">
 
-      <!-- 选模型 -->
-      <div class="glass-card rounded-2xl p-5">
-        <label class="block text-sm font-semibold text-gray-700 mb-3">选择模型</label>
-        <div class="grid grid-cols-2 gap-3">
-          <label class="cursor-pointer">
-            <input type="radio" name="model" value="nano-banana-2" checked class="sr-only peer">
-            <div class="border-2 border-gray-200 rounded-xl p-3 peer-checked:border-purple-500 peer-checked:bg-purple-50 transition">
-              <div class="font-semibold text-gray-800 text-sm">nano-banana-2</div>
-              <div class="text-purple-600 font-bold">¥0.05</div>
-              <div class="text-xs text-gray-400">标准版</div>
+      <!-- Model tabs -->
+      <div style="margin-bottom:10px;">
+        <span class="field-label">选择模型</span>
+      </div>
+      <div class="model-tabs">
+        <div class="model-tab active" id="tab-nb2" onclick="selectModel('nano-banana-2')">
+          <div class="model-tab-icon icon-nb2">N2</div>
+          <span class="model-tab-name">Nano Banana 2</span>
+        </div>
+        <div class="model-tab" id="tab-nbp" onclick="selectModel('nano-banana-pro')">
+          <div class="model-tab-icon icon-nbp">NP</div>
+          <span class="model-tab-name">Nano Banana Pro</span>
+          <div class="model-badge">推荐</div>
+        </div>
+      </div>
+      <div class="model-desc" id="modelDesc">标准版模型，快速生成，性价比之选。</div>
+
+      <!-- Prompt -->
+      <div class="prompt-wrap">
+        <span class="field-label">提示词</span>
+        <textarea class="prompt-textarea" id="promptInput" placeholder="描述您想要生成的图像..." rows="4"></textarea>
+      </div>
+
+      <!-- Aspect ratio -->
+      <div class="ratio-wrap">
+        <span class="field-label">纵横比</span>
+        <div class="ratio-grid">
+
+          <div class="ratio-item active" data-ratio="1:1" onclick="selectRatio(this)">
+            <div class="ratio-icon">
+              <div class="ratio-box" style="width:22px;height:22px;"></div>
             </div>
-          </label>
-          <label class="cursor-pointer">
-            <input type="radio" name="model" value="nano-banana-pro" class="sr-only peer">
-            <div class="border-2 border-gray-200 rounded-xl p-3 peer-checked:border-purple-500 peer-checked:bg-purple-50 transition relative">
-              <div class="absolute -top-2 right-2 bg-purple-600 text-white text-xs px-2 rounded-full">推荐</div>
-              <div class="font-semibold text-gray-800 text-sm">nano-banana-pro</div>
-              <div class="text-purple-600 font-bold">¥0.06</div>
-              <div class="text-xs text-gray-400">专业版</div>
+            <span class="ratio-label">1:1</span>
+          </div>
+
+          <div class="ratio-item" data-ratio="16:9" onclick="selectRatio(this)">
+            <div class="ratio-icon">
+              <div class="ratio-box" style="width:28px;height:16px;"></div>
             </div>
-          </label>
+            <span class="ratio-label">16:9</span>
+          </div>
+
+          <div class="ratio-item" data-ratio="9:16" onclick="selectRatio(this)">
+            <div class="ratio-icon">
+              <div class="ratio-box" style="width:16px;height:28px;"></div>
+            </div>
+            <span class="ratio-label">9:16</span>
+          </div>
+
+          <div class="ratio-item" data-ratio="3:4" onclick="selectRatio(this)">
+            <div class="ratio-icon">
+              <div class="ratio-box" style="width:18px;height:24px;"></div>
+            </div>
+            <span class="ratio-label">3:4</span>
+          </div>
+
+          <div class="ratio-item" data-ratio="4:3" onclick="selectRatio(this)">
+            <div class="ratio-icon">
+              <div class="ratio-box" style="width:24px;height:18px;"></div>
+            </div>
+            <span class="ratio-label">4:3</span>
+          </div>
+
         </div>
       </div>
 
-      <!-- 商品图上传 -->
-      <div class="glass-card rounded-2xl p-5">
-        <label class="block text-sm font-semibold text-gray-700 mb-3">商品图 <span class="text-red-500">*</span></label>
-        <div id="dropZone" class="drop-zone rounded-xl p-8 text-center cursor-pointer hover:border-purple-400 transition"
-             onclick="document.getElementById('fileInput').click()"
-             ondragover="dragOver(event)" ondragleave="dragLeave(event)" ondrop="dropFile(event)">
-          <div id="dropPlaceholder">
-            <div class="text-4xl mb-3">🖼️</div>
-            <div class="text-gray-500 text-sm">点击选择或拖拽图片</div>
-            <div class="text-gray-400 text-xs mt-1">支持 JPG / PNG / WEBP</div>
+      <!-- Output format -->
+      <div class="format-wrap">
+        <span class="field-label">输出格式</span>
+        <div class="format-row">
+          <div class="format-item active" data-fmt="PNG" onclick="selectFormat(this)">
+            <div class="format-icon-box">
+              <span class="format-icon-text">PNG</span>
+            </div>
+            <span class="format-label">PNG</span>
           </div>
-          <img id="previewImg" class="hidden mx-auto max-h-40 rounded-xl object-contain" alt="预览">
+          <div class="format-item" data-fmt="JPEG" onclick="selectFormat(this)">
+            <div class="format-icon-box">
+              <span class="format-icon-text">JPG</span>
+            </div>
+            <span class="format-label">JPEG</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Resolution -->
+      <div class="res-wrap">
+        <span class="field-label">分辨率</span>
+        <div class="res-row">
+
+          <div class="res-item active" data-res="1K" onclick="selectRes(this)">
+            <div class="res-icon">
+              <svg viewBox="0 0 14 14" fill="none">
+                <rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M4 9V5M6 5v4M6 7h2M8 5v4" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <span class="res-label">1K</span>
+          </div>
+
+          <div class="res-item" data-res="2K" onclick="selectRes(this)">
+            <div class="res-icon">
+              <svg viewBox="0 0 14 14" fill="none">
+                <rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M3 9l2.5-4L8 9M3 9h5" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M9 5v4" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <span class="res-label">2K</span>
+          </div>
+
+          <div class="res-item" data-res="4K" onclick="selectRes(this)">
+            <div class="res-icon">
+              <svg viewBox="0 0 14 14" fill="none">
+                <rect x="1" y="1" width="12" height="12" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M3 7.5L5.5 5v2.5H8M5.5 7.5V9" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M9 5v4" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+              </svg>
+            </div>
+            <span class="res-label">4K</span>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Image reference upload -->
+      <div class="upload-wrap">
+        <span class="field-label">图片参考 <span style="color:var(--text3);font-weight:400;">（可选）</span></span>
+        <div class="upload-zone" id="uploadZone"
+             onclick="document.getElementById('fileInput').click()"
+             ondragover="onDragOver(event)"
+             ondragleave="onDragLeave(event)"
+             ondrop="onDrop(event)">
+          <div id="uploadPlaceholder">
+            <div class="upload-placeholder-icon">
+              <svg viewBox="0 0 20 20" fill="none">
+                <rect x="2" y="4" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.3"/>
+                <circle cx="7" cy="9" r="1.5" stroke="currentColor" stroke-width="1.3"/>
+                <path d="M2 13l4-3 3 2.5 3-3.5 4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="upload-placeholder-text">点击选择或拖入图片</div>
+            <div class="upload-placeholder-hint">支持 JPG、PNG、WEBP</div>
+          </div>
+          <div class="upload-preview" id="uploadPreview">
+            <img id="previewImg" alt="预览">
+            <div class="upload-clear" onclick="clearUpload(event)" title="移除">
+              <svg width="10" height="10" viewBox="0 0 10 10"><path d="M1 1l8 8M9 1L1 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </div>
+          </div>
         </div>
         <input type="file" id="fileInput" accept="image/*" class="hidden" onchange="onFileSelect(event)">
       </div>
 
-      <!-- 或输入图片URL -->
-      <div class="glass-card rounded-2xl p-5">
-        <label class="block text-sm font-semibold text-gray-700 mb-3">或输入商品图 URL</label>
-        <input type="url" id="imageUrl" placeholder="https://example.com/product.jpg"
-               class="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300">
-        <div class="text-xs text-gray-400 mt-1">上传文件或填写URL，两者选其一</div>
-      </div>
+    </div><!-- /left-scroll -->
 
-      <!-- 生成按钮 -->
-      <button id="generateBtn" onclick="startGenerate()"
-              class="w-full gradient-bg text-white py-3.5 rounded-xl font-bold text-base hover:opacity-90 transition flex items-center justify-center gap-2">
-        <span id="btnText">✨ 开始生成</span>
-        <span id="btnSpinner" class="spinner hidden"></span>
+    <!-- Bottom action bar -->
+    <div class="bottom-bar">
+      <div class="bottom-info">
+        <div class="bottom-balance" id="bottomBalance">余额 <strong id="balanceAmt">0.00</strong> 元</div>
+        <div class="bottom-cost">本次消耗：<span id="costDisplay">¥0.05</span></div>
+      </div>
+      <button class="btn-generate" id="generateBtn" onclick="startGenerate()">
+        <div class="spinner" id="spinner"></div>
+        <span id="btnLabel">生成</span>
+        <span class="btn-arrow" id="btnArrow">→</span>
       </button>
     </div>
+  </div><!-- /left-panel -->
 
-    <!-- 右：结果区 -->
-    <div class="space-y-6">
-      <h2 class="text-2xl font-bold text-gray-800">生成结果</h2>
+  <!-- Right panel -->
+  <div class="right-panel" id="rightPanel">
 
-      <!-- 等待态 -->
-      <div id="statusCard" class="hidden glass-card rounded-2xl p-8 text-center">
-        <div class="flex items-center justify-center gap-2 mb-4">
-          <div class="pulse-dot"></div>
-          <div class="pulse-dot" style="animation-delay:.2s"></div>
-          <div class="pulse-dot" style="animation-delay:.4s"></div>
-        </div>
-        <div id="statusText" class="text-gray-600 font-medium">任务已提交，等待处理...</div>
-        <div id="taskIdText" class="text-xs text-gray-400 mt-2 font-mono"></div>
-        <div class="mt-4 text-sm text-gray-400">通常 1-3 分钟完成</div>
+    <!-- Showcase (default state) -->
+    <div class="showcase" id="showcase">
+      <div class="showcase-header">
+        <div class="showcase-title">人工智能图像生成</div>
+        <div class="showcase-sub">探索 AI 图像生成的强大能力，选择模型、输入描述，即刻创作。</div>
       </div>
 
-      <!-- 成功态 -->
-      <div id="successCard" class="hidden glass-card rounded-2xl p-6">
-        <div class="text-green-600 font-semibold mb-3 flex items-center gap-2">
-          <span>✅</span> 生成成功
+      <div class="carousel-wrap">
+        <div class="carousel-viewport">
+          <div class="carousel-slides" id="carouselSlides">
+
+            <!-- Slide 1 -->
+            <div class="carousel-slide">
+              <div class="slide-images">
+                <div class="slide-img">
+                  <div class="slide-gradient" style="background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);"></div>
+                  <div class="slide-cat-badge">写实摄影</div>
+                </div>
+                <div class="slide-img">
+                  <div class="slide-gradient" style="background:linear-gradient(135deg,#1a1a2e,#16213e,#0f3460);"></div>
+                </div>
+              </div>
+              <div class="slide-prompt-strip">
+                <div class="slide-prompt-label">
+                  <div class="slide-prompt-label-icon">
+                    <svg viewBox="0 0 10 10" fill="none"><path d="M1 2h8M1 5h5M1 8h7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                  </div>
+                  <span class="slide-prompt-label-text">Text Prompt</span>
+                </div>
+                <div class="slide-prompt-text">一位穿着太空服的宇航员站在深空星云背景前，望向远处的星系...</div>
+                <div class="slide-try-row">
+                  <span class="slide-category-name">写实摄影</span>
+                  <button class="btn-try" onclick="tryPrompt(0)">
+                    <svg viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2l4 4-4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    试试
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Slide 2 -->
+            <div class="carousel-slide">
+              <div class="slide-images">
+                <div class="slide-img">
+                  <div class="slide-gradient" style="background:linear-gradient(135deg,#134e5e,#71b280);"></div>
+                  <div class="slide-cat-badge">自然风景</div>
+                </div>
+                <div class="slide-img">
+                  <div class="slide-gradient" style="background:linear-gradient(135deg,#0a3d2b,#1a6b4a,#0d5c38);"></div>
+                </div>
+              </div>
+              <div class="slide-prompt-strip">
+                <div class="slide-prompt-label">
+                  <div class="slide-prompt-label-icon">
+                    <svg viewBox="0 0 10 10" fill="none"><path d="M1 2h8M1 5h5M1 8h7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                  </div>
+                  <span class="slide-prompt-label-text">Text Prompt</span>
+                </div>
+                <div class="slide-prompt-text">晨雾中的深山竹林，阳光透过竹叶洒落，远处山峰若隐若现...</div>
+                <div class="slide-try-row">
+                  <span class="slide-category-name">自然风景</span>
+                  <button class="btn-try" onclick="tryPrompt(1)">
+                    <svg viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2l4 4-4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    试试
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Slide 3 -->
+            <div class="carousel-slide">
+              <div class="slide-images">
+                <div class="slide-img">
+                  <div class="slide-gradient" style="background:linear-gradient(135deg,#2d1b69,#7b2d8b,#c2185b);"></div>
+                  <div class="slide-cat-badge">艺术插画</div>
+                </div>
+                <div class="slide-img">
+                  <div class="slide-gradient" style="background:linear-gradient(135deg,#1a0a3c,#4a0e6e,#7b1fa2);"></div>
+                </div>
+              </div>
+              <div class="slide-prompt-strip">
+                <div class="slide-prompt-label">
+                  <div class="slide-prompt-label-icon">
+                    <svg viewBox="0 0 10 10" fill="none"><path d="M1 2h8M1 5h5M1 8h7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                  </div>
+                  <span class="slide-prompt-label-text">Text Prompt</span>
+                </div>
+                <div class="slide-prompt-text">赛博朋克风格的未来都市夜景，霓虹灯倒映在雨后的街道，行人撑着透明伞...</div>
+                <div class="slide-try-row">
+                  <span class="slide-category-name">艺术插画</span>
+                  <button class="btn-try" onclick="tryPrompt(2)">
+                    <svg viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2l4 4-4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    试试
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Slide 4 -->
+            <div class="carousel-slide">
+              <div class="slide-images">
+                <div class="slide-img">
+                  <div class="slide-gradient" style="background:linear-gradient(135deg,#b34f00,#7c2d00,#4a1800);"></div>
+                  <div class="slide-cat-badge">产品展示</div>
+                </div>
+                <div class="slide-img">
+                  <div class="slide-gradient" style="background:linear-gradient(135deg,#1c0a00,#3d1a00,#6b2e00);"></div>
+                </div>
+              </div>
+              <div class="slide-prompt-strip">
+                <div class="slide-prompt-label">
+                  <div class="slide-prompt-label-icon">
+                    <svg viewBox="0 0 10 10" fill="none"><path d="M1 2h8M1 5h5M1 8h7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                  </div>
+                  <span class="slide-prompt-label-text">Text Prompt</span>
+                </div>
+                <div class="slide-prompt-text">极简主义风格的产品展示，光滑表面反射柔和光线，背景渐变纯净...</div>
+                <div class="slide-try-row">
+                  <span class="slide-category-name">产品展示</span>
+                  <button class="btn-try" onclick="tryPrompt(3)">
+                    <svg viewBox="0 0 12 12" fill="none"><path d="M2 6h8M6 2l4 4-4 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    试试
+                  </button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+          <!-- Nav arrows (inside viewport, overlaid) -->
+          <div class="carousel-nav">
+            <button class="carousel-btn" onclick="carouselPrev()">&#8592;</button>
+            <button class="carousel-btn" onclick="carouselNext()">&#8594;</button>
+          </div>
         </div>
-        <img id="resultImg" class="w-full rounded-xl object-contain max-h-80" alt="生成结果">
-        <div class="flex gap-3 mt-4">
-          <a id="downloadBtn" href="#" download="geminigen_result.png" target="_blank"
-             class="flex-1 text-center border-2 border-purple-600 text-purple-600 rounded-xl py-2 text-sm font-medium hover:bg-purple-50 transition">
+
+        <!-- Dots -->
+        <div class="carousel-dots" id="carouselDots">
+          <div class="dot active" onclick="goToSlide(0)"></div>
+          <div class="dot" onclick="goToSlide(1)"></div>
+          <div class="dot" onclick="goToSlide(2)"></div>
+          <div class="dot" onclick="goToSlide(3)"></div>
+        </div>
+
+        <!-- Info row -->
+        <div class="carousel-info" id="carouselInfo">
+          <div class="carousel-info-title" id="infoTitle">写实摄影</div>
+          <div class="carousel-info-sub" id="infoSub">使用提示词生成高质量写实风格图像</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status card -->
+    <div class="result-panel hidden" id="statusPanel">
+      <div class="status-card">
+        <div class="pulse-row">
+          <div class="pulse-dot"></div>
+          <div class="pulse-dot"></div>
+          <div class="pulse-dot"></div>
+        </div>
+        <div class="status-text" id="statusText">任务已提交</div>
+        <div class="status-sub" id="statusSub">正在等待处理，通常需要 1-3 分钟...</div>
+        <div class="status-task-id" id="statusTaskId"></div>
+      </div>
+    </div>
+
+    <!-- Success card -->
+    <div class="result-panel hidden" id="successPanel">
+      <div class="success-card">
+        <div class="success-header">
+          <div class="success-dot"></div>
+          <span class="success-label">生成成功</span>
+        </div>
+        <div class="result-image-wrap">
+          <img id="resultImg" alt="生成结果">
+        </div>
+        <div class="result-actions">
+          <a id="downloadBtn" href="#" download="geminigen_result.png" target="_blank" class="btn-outline">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2v7M4 7l3 3 3-3M2 11h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             下载图片
           </a>
-          <button onclick="resetForm()" class="flex-1 gradient-bg text-white rounded-xl py-2 text-sm font-medium hover:opacity-90 transition">
+          <button class="btn-outline" onclick="resetToShowcase()" style="flex:none;padding:11px 20px;">
             再次生成
           </button>
         </div>
       </div>
+    </div>
 
-      <!-- 失败态 -->
-      <div id="failCard" class="hidden glass-card rounded-2xl p-6">
-        <div class="text-red-500 font-semibold mb-2 flex items-center gap-2"><span>❌</span> 生成失败</div>
-        <div id="failMsg" class="text-gray-600 text-sm"></div>
-        <div class="text-xs text-gray-400 mt-2">费用已退回账户</div>
-        <button onclick="resetForm()" class="mt-4 w-full border border-gray-200 rounded-xl py-2 text-sm hover:bg-gray-50 transition">重新尝试</button>
-      </div>
-
-      <!-- 空态 -->
-      <div id="emptyCard" class="glass-card rounded-2xl p-10 text-center text-gray-400">
-        <div class="text-5xl mb-4">🎨</div>
-        <div>上传商品图后点击生成<br>AI 将自动选择场景合成仓库风格图</div>
-      </div>
-
-      <!-- 历史小记 -->
-      <div id="recentTasks" class="glass-card rounded-2xl p-5">
-        <div class="font-semibold text-gray-700 mb-3 text-sm">最近任务</div>
-        <div id="recentList" class="space-y-2 text-sm text-gray-500">加载中...</div>
+    <!-- Fail card -->
+    <div class="result-panel hidden" id="failPanel">
+      <div class="fail-card">
+        <div class="fail-header">
+          <div class="fail-dot"></div>
+          <span class="fail-label">生成失败</span>
+        </div>
+        <div class="fail-msg" id="failMsg">生成过程中出现错误</div>
+        <div class="fail-refund">费用已自动退回账户</div>
+        <button class="btn-outline" onclick="resetToShowcase()" style="width:100%;border-color:rgba(255,69,58,0.3);">
+          重新尝试
+        </button>
       </div>
     </div>
 
-  </div>
-</div>
+  </div><!-- /right-panel -->
+</div><!-- /app -->
 
 <script>
 const API = '';
 let token = localStorage.getItem('gg_token');
 let pollTimer = null;
+let currentModel = 'nano-banana-2';
+let currentRatio  = '1:1';
+let currentFmt    = 'PNG';
+let currentRes    = '1K';
+let currentSlide  = 0;
+const SLIDE_COUNT = 4;
 
-// ── 初始化 ────────────────────────────────────────────────────
-window.onload = async () => {
+const MODEL_COSTS = { 'nano-banana-2': 0.05, 'nano-banana-pro': 0.06 };
+const MODEL_DESCS = {
+  'nano-banana-2':   '标准版模型，快速生成，性价比之选。',
+  'nano-banana-pro': '专业版模型，画质更精细，细节还原度更高。',
+};
+const SLIDE_PROMPTS = [
+  '一位穿着太空服的宇航员站在深空星云背景前，望向远处的星系，光影质感写实',
+  '晨雾中的深山竹林，阳光透过竹叶洒落，远处山峰若隐若现，水墨画风格',
+  '赛博朋克风格的未来都市夜景，霓虹灯倒映在雨后的街道，行人撑着透明雨伞',
+  '极简主义风格的产品展示，光滑表面反射柔和光线，背景渐变纯净，商业摄影',
+];
+const SLIDE_INFOS = [
+  { title: '写实摄影',   sub: '使用提示词生成高质量写实风格图像' },
+  { title: '自然风景',   sub: '将文字描述转化为宁静优美的自然场景' },
+  { title: '艺术插画',   sub: '探索赛博朋克、概念艺术等多种风格' },
+  { title: '产品展示',   sub: '生成专业级商业摄影风格图像' },
+];
+
+// ── Init ─────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', async () => {
   if (!token) {
-    document.getElementById('loginPrompt').classList.remove('hidden');
+    document.getElementById('loginGate').classList.remove('hidden');
     return;
   }
   try {
     const user = await apiFetch('/auth/me');
-    document.getElementById('balanceDisplay').textContent = '¥' + user.balance.toFixed(4);
-    document.getElementById('mainContent').classList.remove('hidden');
-    loadRecentTasks();
+    document.getElementById('app').classList.remove('hidden');
+    updateBalanceDisplay(user.balance);
   } catch {
-    document.getElementById('loginPrompt').classList.remove('hidden');
+    document.getElementById('loginGate').classList.remove('hidden');
   }
-};
+  startCarouselAuto();
+});
 
-// ── 拖拽 ──────────────────────────────────────────────────────
-function dragOver(e) { e.preventDefault(); document.getElementById('dropZone').classList.add('drag-over'); }
-function dragLeave(e) { document.getElementById('dropZone').classList.remove('drag-over'); }
-function dropFile(e) {
-  e.preventDefault();
-  document.getElementById('dropZone').classList.remove('drag-over');
-  const file = e.dataTransfer.files[0];
-  if (file) setFile(file);
+function updateBalanceDisplay(bal) {
+  const s = bal.toFixed(4);
+  document.getElementById('navBalance').textContent = '¥' + s;
+  document.getElementById('balanceAmt').textContent = s;
 }
 
+// ── Model selection ──────────────────────────────────────────
+function selectModel(model) {
+  currentModel = model;
+  document.getElementById('tab-nb2').classList.toggle('active', model === 'nano-banana-2');
+  document.getElementById('tab-nbp').classList.toggle('active', model === 'nano-banana-pro');
+  document.getElementById('modelDesc').textContent = MODEL_DESCS[model];
+  document.getElementById('costDisplay').textContent = '¥' + MODEL_COSTS[model].toFixed(2);
+}
+
+// ── Ratio selection ──────────────────────────────────────────
+function selectRatio(el) {
+  document.querySelectorAll('.ratio-item').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  currentRatio = el.dataset.ratio;
+}
+
+// ── Format selection ─────────────────────────────────────────
+function selectFormat(el) {
+  document.querySelectorAll('.format-item').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  currentFmt = el.dataset.fmt;
+}
+
+// ── Resolution selection ─────────────────────────────────────
+function selectRes(el) {
+  document.querySelectorAll('.res-item').forEach(e => e.classList.remove('active'));
+  el.classList.add('active');
+  currentRes = el.dataset.res;
+}
+
+// ── File upload ──────────────────────────────────────────────
+function onDragOver(e) {
+  e.preventDefault();
+  document.getElementById('uploadZone').classList.add('drag-over');
+}
+function onDragLeave(e) {
+  document.getElementById('uploadZone').classList.remove('drag-over');
+}
+function onDrop(e) {
+  e.preventDefault();
+  document.getElementById('uploadZone').classList.remove('drag-over');
+  const file = e.dataTransfer.files[0];
+  if (file && file.type.startsWith('image/')) setFile(file);
+}
 function onFileSelect(e) {
   const file = e.target.files[0];
   if (file) setFile(file);
 }
-
 function setFile(file) {
   const reader = new FileReader();
-  reader.onload = (e) => {
-    document.getElementById('dropPlaceholder').classList.add('hidden');
-    const img = document.getElementById('previewImg');
-    img.src = e.target.result;
-    img.classList.remove('hidden');
-    document.getElementById('imageUrl').value = '';
+  reader.onload = ev => {
+    document.getElementById('previewImg').src = ev.target.result;
+    document.getElementById('uploadPlaceholder').classList.add('hidden');
+    document.getElementById('uploadPreview').style.display = 'block';
   };
   reader.readAsDataURL(file);
 }
+function clearUpload(e) {
+  e.stopPropagation();
+  document.getElementById('fileInput').value = '';
+  document.getElementById('previewImg').src = '';
+  document.getElementById('uploadPreview').style.display = 'none';
+  document.getElementById('uploadPlaceholder').classList.remove('hidden');
+}
 
-// ── 生成 ──────────────────────────────────────────────────────
+// ── Generate ─────────────────────────────────────────────────
 async function startGenerate() {
-  const model = document.querySelector('input[name="model"]:checked').value;
-  const imageUrl = document.getElementById('imageUrl').value.trim();
   const fileInput = document.getElementById('fileInput');
-  const hasFile = fileInput.files && fileInput.files[0];
+  const hasFile   = fileInput.files && fileInput.files[0];
 
-  if (!imageUrl && !hasFile) {
-    alert('请上传商品图或输入图片 URL');
+  if (!hasFile) {
+    showToast('请先上传一张参考图片');
     return;
   }
 
   setBtnLoading(true);
-  showCard('status');
+  showPanel('status');
+  document.getElementById('statusText').textContent = '任务已提交';
+  document.getElementById('statusSub').textContent = '正在等待处理，通常需要 1-3 分钟...';
+  document.getElementById('statusTaskId').textContent = '';
 
   try {
-    let task;
-    if (hasFile) {
-      // 文件上传方式
-      const formData = new FormData();
-      formData.append('product_image', fileInput.files[0]);
-      formData.append('model', model);
-      const res = await fetch('/v1/generate/upload', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + token },
-        body: formData,
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || '提交失败');
-      }
-      task = await res.json();
-    } else {
-      // URL 方式
-      task = await apiFetch('/v1/generate', 'POST', {
-        product_image_url: imageUrl,
-        model,
-      });
+    const formData = new FormData();
+    formData.append('product_image', fileInput.files[0]);
+    formData.append('model', currentModel);
+    formData.append('prompt', document.getElementById('promptInput').value.trim());
+    formData.append('aspect_ratio', currentRatio);
+    formData.append('resolution', currentRes);
+    formData.append('output_format', currentFmt);
+
+    const res = await fetch(API + '/v1/generate/upload', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token },
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `提交失败 (${res.status})`);
     }
 
-    document.getElementById('taskIdText').textContent = 'Task ID: ' + task.task_id;
-    document.getElementById('statusText').textContent = '任务已提交，等待处理...';
+    const task = await res.json();
+    document.getElementById('statusTaskId').textContent = 'Task ID: ' + task.task_id;
     setBtnLoading(false);
     startPolling(task.task_id);
 
+    // Refresh balance
+    apiFetch('/auth/me').then(u => updateBalanceDisplay(u.balance)).catch(() => {});
+
   } catch (e) {
     setBtnLoading(false);
-    showCard('fail');
+    showPanel('fail');
     document.getElementById('failMsg').textContent = e.message;
   }
 }
 
 function startPolling(taskId) {
   let attempts = 0;
+  if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     attempts++;
     try {
       const task = await apiFetch('/v1/tasks/' + taskId);
       if (task.status === 'processing') {
-        document.getElementById('statusText').textContent = `处理中... (${attempts * 5}s)`;
+        document.getElementById('statusText').textContent = '正在生成中';
+        document.getElementById('statusSub').textContent = `已等待 ${attempts * 5} 秒，请稍候...`;
       } else if (task.status === 'success') {
         clearInterval(pollTimer);
-        showCard('success');
+        pollTimer = null;
+        showPanel('success');
         document.getElementById('resultImg').src = task.result_image_url;
         document.getElementById('downloadBtn').href = task.result_image_url;
-        // 更新余额
-        try {
-          const user = await apiFetch('/auth/me');
-          document.getElementById('balanceDisplay').textContent = '¥' + user.balance.toFixed(4);
-        } catch {}
-        loadRecentTasks();
+        apiFetch('/auth/me').then(u => updateBalanceDisplay(u.balance)).catch(() => {});
       } else if (task.status === 'failed') {
         clearInterval(pollTimer);
-        showCard('fail');
-        document.getElementById('failMsg').textContent = task.error_msg || '生成失败';
+        pollTimer = null;
+        showPanel('fail');
+        document.getElementById('failMsg').textContent = task.error_msg || '生成失败，请重试';
       }
-      if (attempts > 120) {  // 10分钟超时
+      if (attempts > 120) {
         clearInterval(pollTimer);
-        showCard('fail');
+        pollTimer = null;
+        showPanel('fail');
         document.getElementById('failMsg').textContent = '等待超时，请刷新页面查看任务状态';
       }
-    } catch {}
+    } catch { /* network glitch, retry next tick */ }
   }, 5000);
 }
 
-function showCard(name) {
-  ['status','success','fail','empty'].forEach(c => {
-    document.getElementById(c + 'Card').classList.toggle('hidden', c !== name);
-  });
+// ── Panel switching ──────────────────────────────────────────
+function showPanel(name) {
+  // name: 'showcase' | 'status' | 'success' | 'fail'
+  document.getElementById('showcase').classList.toggle('hidden', name !== 'showcase');
+  document.getElementById('statusPanel').classList.toggle('hidden', name !== 'status');
+  document.getElementById('successPanel').classList.toggle('hidden', name !== 'success');
+  document.getElementById('failPanel').classList.toggle('hidden', name !== 'fail');
 }
 
-function setBtnLoading(loading) {
-  document.getElementById('generateBtn').disabled = loading;
-  document.getElementById('btnSpinner').classList.toggle('hidden', !loading);
-  document.getElementById('btnText').textContent = loading ? '生成中...' : '✨ 开始生成';
-}
-
-function resetForm() {
-  if (pollTimer) clearInterval(pollTimer);
-  document.getElementById('fileInput').value = '';
-  document.getElementById('previewImg').classList.add('hidden');
-  document.getElementById('dropPlaceholder').classList.remove('hidden');
-  document.getElementById('imageUrl').value = '';
-  showCard('empty');
+function resetToShowcase() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  showPanel('showcase');
   setBtnLoading(false);
 }
 
-// ── 最近任务 ──────────────────────────────────────────────────
-async function loadRecentTasks() {
-  try {
-    const tasks = await apiFetch('/v1/tasks?limit=5');
-    const el = document.getElementById('recentList');
-    if (!tasks.length) { el.innerHTML = '<div class="text-gray-400">暂无记录</div>'; return; }
-    const statusMap = { pending:'⏳', processing:'🔄', success:'✅', failed:'❌' };
-    el.innerHTML = tasks.map(t => `
-      <div class="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">
-        <div class="flex items-center gap-2">
-          <span>${statusMap[t.status]||'?'}</span>
-          <span class="font-mono text-xs text-gray-400">${t.task_id.substring(0,8)}</span>
-          <span class="text-gray-600">${t.model}</span>
-        </div>
-        <div>${t.result_image_url ? `<a href="${t.result_image_url}" target="_blank" class="text-purple-500 hover:underline text-xs">查看</a>` : ''}</div>
-      </div>
-    `).join('');
-  } catch {
-    document.getElementById('recentList').innerHTML = '<div class="text-gray-400">加载失败</div>';
-  }
+function setBtnLoading(loading) {
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = loading;
+  document.getElementById('spinner').style.display = loading ? 'block' : 'none';
+  document.getElementById('btnLabel').textContent = loading ? '生成中' : '生成';
+  document.getElementById('btnArrow').style.display = loading ? 'none' : 'inline';
 }
 
-// ── API Helper ────────────────────────────────────────────────
+// ── Carousel ─────────────────────────────────────────────────
+let autoTimer = null;
+
+function goToSlide(idx) {
+  currentSlide = ((idx % SLIDE_COUNT) + SLIDE_COUNT) % SLIDE_COUNT;
+  document.getElementById('carouselSlides').style.transform =
+    `translateX(-${currentSlide * 100}%)`;
+  document.querySelectorAll('.dot').forEach((d, i) => {
+    d.classList.toggle('active', i === currentSlide);
+  });
+  const info = SLIDE_INFOS[currentSlide];
+  document.getElementById('infoTitle').textContent = info.title;
+  document.getElementById('infoSub').textContent   = info.sub;
+}
+
+function carouselNext() { goToSlide(currentSlide + 1); resetAutoTimer(); }
+function carouselPrev() { goToSlide(currentSlide - 1); resetAutoTimer(); }
+
+function startCarouselAuto() {
+  autoTimer = setInterval(() => goToSlide(currentSlide + 1), 5000);
+}
+
+function resetAutoTimer() {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+  startCarouselAuto();
+}
+
+// ── Try prompt ───────────────────────────────────────────────
+function tryPrompt(idx) {
+  document.getElementById('promptInput').value = SLIDE_PROMPTS[idx];
+  document.getElementById('leftScroll').scrollTop = 0;
+  document.getElementById('promptInput').focus();
+}
+
+// ── Toast ─────────────────────────────────────────────────────
+function showToast(msg) {
+  const existing = document.getElementById('toast');
+  if (existing) existing.remove();
+  const t = document.createElement('div');
+  t.id = 'toast';
+  t.textContent = msg;
+  Object.assign(t.style, {
+    position: 'fixed', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
+    background: 'rgba(30,30,30,0.95)', color: '#f5f5f7',
+    padding: '10px 20px', borderRadius: '20px',
+    fontSize: '13px', fontWeight: '500', zIndex: '999',
+    border: '1px solid rgba(255,255,255,0.12)',
+    backdropFilter: 'blur(10px)',
+    animation: 'fadeIn .2s ease',
+  });
+  document.body.appendChild(t);
+  setTimeout(() => { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; setTimeout(() => t.remove(), 300); }, 2500);
+}
+
+// ── API helper ────────────────────────────────────────────────
 async function apiFetch(path, method = 'GET', body = null) {
   const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token };
-  const res = await fetch(API + path, {
-    method, headers,
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const res = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json();
   if (!res.ok) throw new Error(data.detail || JSON.stringify(data));
   return data;

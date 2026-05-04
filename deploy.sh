@@ -105,21 +105,17 @@ EOF
 fi
 
 # ============================================================
-# 4. 初始化数据库表
+# 4. 初始化数据库表 + 迁移新字段
 # ============================================================
 info "初始化数据库表..."
-if command -v mysql &>/dev/null; then
-    mysql -h 47.95.157.46 -P 3306 -u root -p'root@kunkun' < schema.sql \
-        && success "数据库表初始化完成" \
-        || warn "数据库初始化失败，请手动执行: mysql < schema.sql"
-else
-    $PYTHON - <<'PYEOF'
-import pymysql, re, sys
+$PYTHON - <<'PYEOF'
+import pymysql, re
 
 sql_file = "schema.sql"
 with open(sql_file, "r", encoding="utf-8") as f:
     content = f.read()
 
+# 移除 USE 语句，database 已在连接参数中指定
 content = re.sub(r'^\s*USE\s+\S+\s*;\s*$', '', content, flags=re.MULTILINE | re.IGNORECASE)
 
 conn = pymysql.connect(
@@ -128,20 +124,40 @@ conn = pymysql.connect(
     database="geminigen_platform", charset="utf8mb4",
     connect_timeout=10,
 )
-statements = [s.strip() for s in content.split(";") if s.strip()]
 try:
     with conn.cursor() as cur:
-        for stmt in statements:
-            if stmt:
+        # 执行建表 DDL（CREATE TABLE IF NOT EXISTS 幂等）
+        for stmt in [s.strip() for s in content.split(";") if s.strip()]:
+            try:
                 cur.execute(stmt)
-    conn.commit()
-    print("[OK]   数据库表初始化完成")
+            except Exception as e:
+                print(f"[WARN] DDL: {e}")
+        conn.commit()
+
+        # ── 迁移：为已有 gen_tasks 表补充新列（幂等）──────────
+        migrations = [
+            "ALTER TABLE gen_tasks ADD COLUMN aspect_ratio  VARCHAR(10) NOT NULL DEFAULT '1:1'  AFTER prompt_text",
+            "ALTER TABLE gen_tasks ADD COLUMN resolution    VARCHAR(10) NOT NULL DEFAULT '1K'   AFTER aspect_ratio",
+            "ALTER TABLE gen_tasks ADD COLUMN output_format VARCHAR(10) NOT NULL DEFAULT 'PNG'  AFTER resolution",
+        ]
+        for sql in migrations:
+            try:
+                cur.execute(sql)
+                conn.commit()
+                col = sql.split("ADD COLUMN")[1].split()[0]
+                print(f"[OK]   迁移列: {col}")
+            except pymysql.err.OperationalError as e:
+                if e.args[0] == 1060:  # Duplicate column — 已存在，跳过
+                    pass
+                else:
+                    print(f"[WARN] 迁移失败: {e}")
+
+    print("[OK]   数据库初始化完成")
 except Exception as e:
-    print(f"[WARN] 数据库初始化: {e}")
+    print(f"[WARN] 数据库初始化异常: {e}")
 finally:
     conn.close()
 PYEOF
-fi
 
 # ============================================================
 # 5. 创建 systemd 服务（用 venv 内的 Python，彻底隔离依赖）

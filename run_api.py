@@ -1,64 +1,51 @@
 #!/usr/bin/env python3
-"""Stable API entrypoint that avoids stdlib `platform` shadowing issues."""
+"""API entrypoint — resolves stdlib/local 'platform' name conflict."""
 
 from __future__ import annotations
 
-import importlib.util
-import os
 import sys
-import sysconfig
 from pathlib import Path
 
+# ── Step 1: remove project root from sys.path BEFORE any imports.
+# Python automatically inserts the script's directory as sys.path[0] when the
+# interpreter starts.  Our local platform/ directory would shadow stdlib
+# 'platform', causing pydantic-core to fail during C-extension initialisation.
+_project_root = str(Path(__file__).resolve().parent)
+while _project_root in sys.path:
+    sys.path.remove(_project_root)
 
-def _load_stdlib_platform() -> None:
-    stdlib = sysconfig.get_paths().get("stdlib")
-    if not stdlib:
-        return
-    std_platform = Path(stdlib) / "platform.py"
-    if not std_platform.exists():
-        return
-    spec = importlib.util.spec_from_file_location("platform", std_platform)
-    if not spec or not spec.loader:
-        return
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    sys.modules["platform"] = mod
+# ── Step 2: import all external packages now that stdlib platform is clean.
+import os          # noqa: E402
+import uvicorn     # noqa: E402
+import fastapi     # noqa: E402
+import pydantic    # noqa: E402
 
+# ── Step 3: restore project root so our local platform/ package is findable.
+sys.path.insert(0, _project_root)
 
-def _load_app():
-    project_root = Path(__file__).resolve().parent
+# ── Step 4: swap out stdlib platform, import local package, restore.
+_stdlib_platform = sys.modules.pop("platform", None)
 
-    # Prefer compatibility layer when present.
-    app_main = project_root / "app" / "main.py"
-    if app_main.exists():
-        spec = importlib.util.spec_from_file_location("geminigen_app_main", app_main)
-        mod = importlib.util.module_from_spec(spec)
-        assert spec and spec.loader
-        spec.loader.exec_module(mod)
-        return mod.app
+from platform.main import app        # noqa: E402  — local platform/ package
+from platform.config import HOST, PORT  # noqa: E402
 
-    # Fallback to platform package file-path load.
-    platform_main = project_root / "platform" / "main.py"
-    if platform_main.exists():
-        spec = importlib.util.spec_from_file_location("geminigen_platform_main", platform_main)
-        mod = importlib.util.module_from_spec(spec)
-        assert spec and spec.loader
-        spec.loader.exec_module(mod)
-        return mod.app
-
-    raise RuntimeError("No API entrypoint found: app/main.py or platform/main.py")
+if _stdlib_platform is not None:
+    sys.modules["platform"] = _stdlib_platform  # restore for uvicorn logging
 
 
 def main() -> None:
-    _load_stdlib_platform()
-    import uvicorn
-
-    app = _load_app()
-    host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8000"))
-    uvicorn.run(app, host=host, port=port, reload=False, ws="none", loop="asyncio", http="h11")
+    host = os.getenv("HOST", HOST)
+    port = int(os.getenv("PORT", str(PORT)))
+    uvicorn.run(
+        app,
+        host=host,
+        port=port,
+        reload=False,
+        ws="none",
+        loop="asyncio",
+        http="h11",
+    )
 
 
 if __name__ == "__main__":
     main()
-
