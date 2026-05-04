@@ -92,6 +92,11 @@ def generate_page():
     return FileResponse(os.path.join(STATIC_DIR, "generate.html"))
 
 
+@app.get("/app/imagen", include_in_schema=False)
+def app_imagen():
+    return FileResponse(os.path.join(STATIC_DIR, "generate.html"))
+
+
 @app.get("/docs-page", include_in_schema=False)
 def docs_page():
     return FileResponse(os.path.join(STATIC_DIR, "docs.html"))
