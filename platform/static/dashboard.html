@@ -36,81 +36,6 @@ body {
   overflow: hidden;
 }
 
-/* ── Auth modal ──────────────────────────────────────────── */
-.auth-overlay {
-  position: fixed; inset: 0;
-  background: var(--bg);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 200;
-  padding: 20px;
-}
-
-.auth-card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  padding: 40px;
-  width: 100%; max-width: 400px;
-}
-
-.auth-logo {
-  display: flex; flex-direction: column; align-items: center; gap: 10px;
-  margin-bottom: 32px;
-}
-.auth-logo-icon {
-  width: 44px; height: 44px;
-  background: var(--accent);
-  border-radius: 12px;
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 18px; color: #fff;
-}
-.auth-logo-name { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; color: var(--text); }
-.auth-logo-sub  { font-size: 13px; color: var(--text2); text-align: center; }
-
-.auth-tabs {
-  display: flex;
-  background: var(--surf2);
-  border-radius: 10px;
-  padding: 3px;
-  margin-bottom: 24px;
-}
-.auth-tab {
-  flex: 1; padding: 8px;
-  border-radius: 8px;
-  font-size: 13px; font-weight: 600; font-family: var(--font);
-  cursor: pointer; border: none;
-  background: transparent; color: var(--text2);
-  transition: all .2s;
-}
-.auth-tab.active { background: var(--surf3); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.4); }
-
-.auth-input {
-  width: 100%;
-  background: var(--surf2);
-  border: 1.5px solid var(--border);
-  border-radius: 10px;
-  padding: 12px 14px;
-  font-size: 14px; font-family: var(--font);
-  color: var(--text);
-  transition: border-color .2s;
-  margin-bottom: 12px;
-  display: block;
-}
-.auth-input::placeholder { color: var(--text3); }
-.auth-input:focus { outline: none; border-color: rgba(255,255,255,.3); }
-
-.auth-submit {
-  width: 100%;
-  background: var(--accent); color: #fff; border: none;
-  border-radius: 10px; padding: 12px;
-  font-size: 14px; font-weight: 600; font-family: var(--font);
-  cursor: pointer; margin-top: 4px;
-  transition: background .2s;
-}
-.auth-submit:hover { background: var(--accent2); }
-
-.auth-error { font-size: 13px; color: var(--red); text-align: center; margin-top: 12px; min-height: 18px; }
-
 /* ── App layout ──────────────────────────────────────────── */
 .app { display: flex; height: 100vh; }
 
@@ -352,43 +277,12 @@ body {
 </head>
 <body>
 
-<!-- Auth overlay -->
-<div id="authOverlay" class="auth-overlay">
-  <div class="auth-card">
-    <div class="auth-logo">
-      <div class="auth-logo-icon">K</div>
-      <div class="auth-logo-name">Kewen AI</div>
-      <div class="auth-logo-sub">AI 图像生成平台</div>
-    </div>
-
-    <div class="auth-tabs">
-      <button class="auth-tab active" id="tabLogin" onclick="switchTab('login')">登录</button>
-      <button class="auth-tab" id="tabReg" onclick="switchTab('register')">注册</button>
-    </div>
-
-    <form id="loginForm" onsubmit="doLogin(event)">
-      <input type="email" id="loginEmail" class="auth-input" placeholder="邮箱地址" required>
-      <input type="password" id="loginPassword" class="auth-input" placeholder="密码" required>
-      <button type="submit" class="auth-submit">登录</button>
-    </form>
-
-    <form id="registerForm" class="hidden" onsubmit="doRegister(event)">
-      <input type="text" id="regUsername" class="auth-input" placeholder="用户名" required>
-      <input type="email" id="regEmail" class="auth-input" placeholder="邮箱地址" required>
-      <input type="password" id="regPassword" class="auth-input" placeholder="密码（至少 6 位）" required>
-      <button type="submit" class="auth-submit">创建账号</button>
-    </form>
-
-    <div class="auth-error" id="authError"></div>
-  </div>
-</div>
-
 <!-- Main app -->
 <div id="mainApp" class="hidden">
 
   <!-- Header -->
   <header class="app-header">
-    <a href="/dashboard" class="header-logo">
+    <a href="/generate" class="header-logo">
       <div class="header-logo-icon">K</div>
       <span class="header-logo-name">Kewen AI</span>
     </a>
@@ -615,12 +509,10 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 
 function showAuthOverlay() {
-  document.getElementById('authOverlay').classList.remove('hidden');
-  document.getElementById('mainApp').classList.add('hidden');
+  window.location.replace('/generate');
 }
 
 function showApp(user) {
-  document.getElementById('authOverlay').classList.add('hidden');
   document.getElementById('mainApp').classList.remove('hidden');
   updateUserDisplay(user);
 }
@@ -638,48 +530,6 @@ function updateUserDisplay(user) {
   const mc = user.max_concurrent || 1;
   document.getElementById('concurDisplay').textContent = mc;
   document.getElementById('concurSub').textContent = `个并发任务上限`;
-}
-
-// ── Auth tabs ─────────────────────────────────────────────────
-function switchTab(tab) {
-  document.getElementById('loginForm').classList.toggle('hidden', tab !== 'login');
-  document.getElementById('registerForm').classList.toggle('hidden', tab !== 'register');
-  document.getElementById('tabLogin').classList.toggle('active', tab === 'login');
-  document.getElementById('tabReg').classList.toggle('active', tab === 'register');
-  document.getElementById('authError').textContent = '';
-}
-
-async function doLogin(e) {
-  e.preventDefault();
-  const email    = document.getElementById('loginEmail').value;
-  const password = document.getElementById('loginPassword').value;
-  try {
-    const res = await apiFetch('/auth/login', 'POST', { email, password }, false);
-    token = res.access_token;
-    localStorage.setItem('gg_token', token);
-    const user = await apiFetch('/auth/me');
-    currentUser = user;
-    showApp(user);
-  } catch (err) {
-    document.getElementById('authError').textContent = err.message || '登录失败';
-  }
-}
-
-async function doRegister(e) {
-  e.preventDefault();
-  const username = document.getElementById('regUsername').value;
-  const email    = document.getElementById('regEmail').value;
-  const password = document.getElementById('regPassword').value;
-  try {
-    const res = await apiFetch('/auth/register', 'POST', { email, username, password }, false);
-    token = res.access_token;
-    localStorage.setItem('gg_token', token);
-    const user = await apiFetch('/auth/me');
-    currentUser = user;
-    showApp(user);
-  } catch (err) {
-    document.getElementById('authError').textContent = err.message || '注册失败';
-  }
 }
 
 function doLogout() {
