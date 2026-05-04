@@ -80,3 +80,21 @@ CREATE TABLE IF NOT EXISTS recharge_orders (
     paid_at        DATETIME,
     FOREIGN KEY (user_id) REFERENCES platform_users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 邮箱验证码表
+CREATE TABLE IF NOT EXISTS email_verification_codes (
+    id         BIGINT AUTO_INCREMENT PRIMARY KEY,
+    email      VARCHAR(255) NOT NULL,
+    code       VARCHAR(10) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    used       TINYINT NOT NULL DEFAULT 0,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_evc_email (email),
+    INDEX idx_evc_expires (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 迁移：platform_users 新增字段（幂等，已有字段会报 WARN 跳过）
+ALTER TABLE platform_users ADD COLUMN google_id VARCHAR(100) DEFAULT NULL;
+ALTER TABLE platform_users ADD COLUMN avatar_url VARCHAR(500) DEFAULT NULL;
+ALTER TABLE platform_users ADD COLUMN email_verified TINYINT NOT NULL DEFAULT 0;
+ALTER TABLE platform_users MODIFY COLUMN password_hash VARCHAR(255) DEFAULT NULL;

@@ -131,11 +131,15 @@ try:
                 print(f"[WARN] DDL: {e}")
         conn.commit()
 
-        # ── 迁移：为已有 gen_tasks 表补充新列（幂等）──────────
+        # ── 迁移：幂等 ALTER TABLE（列已存在则跳过）──────────
         migrations = [
             "ALTER TABLE gen_tasks ADD COLUMN aspect_ratio  VARCHAR(10) NOT NULL DEFAULT '1:1'  AFTER prompt_text",
             "ALTER TABLE gen_tasks ADD COLUMN resolution    VARCHAR(10) NOT NULL DEFAULT '1K'   AFTER aspect_ratio",
             "ALTER TABLE gen_tasks ADD COLUMN output_format VARCHAR(10) NOT NULL DEFAULT 'PNG'  AFTER resolution",
+            "ALTER TABLE platform_users ADD COLUMN google_id VARCHAR(100) DEFAULT NULL",
+            "ALTER TABLE platform_users ADD COLUMN avatar_url VARCHAR(500) DEFAULT NULL",
+            "ALTER TABLE platform_users ADD COLUMN email_verified TINYINT NOT NULL DEFAULT 0",
+            "ALTER TABLE platform_users MODIFY COLUMN password_hash VARCHAR(255) DEFAULT NULL",
         ]
         for sql in migrations:
             try:

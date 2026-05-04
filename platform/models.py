@@ -4,16 +4,29 @@ from pydantic import BaseModel, EmailStr, field_validator
 
 
 # ── Auth ─────────────────────────────────────────────────────
+class SendCodeRequest(BaseModel):
+    email: EmailStr
+
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     username: str
     password: str
+    code: Optional[str] = None  # 邮箱验证码（SMTP 启用时必填）
 
     @field_validator("password")
     @classmethod
     def password_length(cls, v):
         if len(v) < 6:
             raise ValueError("密码至少6位")
+        return v
+
+    @field_validator("username")
+    @classmethod
+    def username_length(cls, v):
+        v = v.strip()
+        if len(v) < 1 or len(v) > 30:
+            raise ValueError("用户名 1-30 个字符")
         return v
 
 
@@ -27,7 +40,9 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user_id: int
     email: str
+    username: Optional[str] = None
     balance: float
+    points: int = 0
 
 
 # ── 用户 ──────────────────────────────────────────────────────
@@ -36,7 +51,10 @@ class UserResponse(BaseModel):
     email: str
     username: Optional[str]
     balance: float
+    points: int = 0
     total_tasks: int
+    avatar_url: Optional[str] = None
+    email_verified: bool = False
 
 
 # ── API Key ───────────────────────────────────────────────────
@@ -55,7 +73,7 @@ class ApiKeyResponse(BaseModel):
 
 # ── 生成任务 ──────────────────────────────────────────────────
 class GenerateRequest(BaseModel):
-    product_image_url: str
+    product_image_url: Optional[str] = None   # 参考图可选
     model: str = "nano-banana-2"
     scene_image_url: Optional[str] = None
     prompt: Optional[str] = None
@@ -101,15 +119,19 @@ class TaskResponse(BaseModel):
     status: str           # pending | processing | success | failed
     model: str
     cost: Optional[float]
+    points_cost: Optional[int] = None
     result_image_url: Optional[str]
     error_msg: Optional[str]
     created_at: str
     updated_at: str
+    duration_seconds: Optional[int] = None
+    prompt_text: Optional[str] = None
 
 
 # ── 余额 ──────────────────────────────────────────────────────
 class BalanceResponse(BaseModel):
     balance: float
+    points: int
 
 
 class AdminRechargeRequest(BaseModel):

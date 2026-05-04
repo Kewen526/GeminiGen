@@ -50,3 +50,30 @@ TEMP_DIR   = os.path.join(SCRIPT_DIR, "platform_temp")
 # ── 服务地址 ──────────────────────────────────────────────────
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8000"))
+
+# ── 邮件（注册验证码）────────────────────────────────────────
+SMTP_HOST     = os.getenv("SMTP_HOST", "")
+SMTP_PORT     = int(os.getenv("SMTP_PORT", "465"))
+SMTP_USER     = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM     = os.getenv("SMTP_FROM", SMTP_USER)
+SMTP_ENABLED  = bool(SMTP_HOST and SMTP_USER)
+
+# ── Google OAuth（预留）──────────────────────────────────────
+GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+
+# ── 积分制 ────────────────────────────────────────────────────
+POINTS_PER_YUAN = 100   # 1元 = 100积分
+
+# ── 安全限流 ──────────────────────────────────────────────────
+AUTH_RATE_LIMIT     = 10   # 每 IP 每分钟最多 10 次 auth 请求
+GENERATE_RATE_LIMIT = 10   # 每用户每分钟最多 10 次生成请求
+MAX_LOGIN_ATTEMPTS  = 5    # 连续失败 5 次锁定
+LOCKOUT_MINUTES     = 15   # 锁定时长（分钟）
+
+# ── 敏感词 ────────────────────────────────────────────────────
+SENSITIVE_WORDS: list[str] = [
+    "色情", "裸体", "性爱", "淫秽", "毒品", "制毒", "炸弹", "枪支",
+    "赌博", "诈骗", "政治", "暴恐", "恐怖主义",
+]

@@ -209,6 +209,119 @@ def add_balance(user_id: int, amount: float, tx_type: str = "recharge",
         conn.close()
 
 
+def get_user_monthly_spend(user_id: int) -> float:
+    """当月累计消费金额（元）"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(SUM(ABS(amount)), 0) AS total "
+                "FROM balance_transactions "
+                "WHERE user_id = %s AND type = 'deduct' "
+                "AND YEAR(created_at) = YEAR(NOW()) "
+                "AND MONTH(created_at) = MONTH(NOW())",
+                (user_id,),
+            )
+            row = cur.fetchone()
+            return float(row["total"]) if row else 0.0
+    finally:
+        conn.close()
+
+
+def get_user_processing_count(user_id: int) -> int:
+    """当前 pending + processing 任务数"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM gen_tasks "
+                "WHERE user_id = %s AND status IN ('pending', 'processing')",
+                (user_id,),
+            )
+            row = cur.fetchone()
+            return int(row["cnt"]) if row else 0
+    finally:
+        conn.close()
+
+
+def get_user_tasks_recent(user_id: int, days: int = 7, limit: int = 50) -> list:
+    """最近 N 天任务，附带运行时长"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT task_id, model, status, cost, result_image_url, "
+                "       error_msg, created_at, updated_at, prompt_text, "
+                "       TIMESTAMPDIFF(SECOND, created_at, updated_at) AS duration_seconds "
+                "FROM gen_tasks WHERE user_id = %s "
+                "AND created_at >= NOW() - INTERVAL %s DAY "
+                "ORDER BY created_at DESC LIMIT %s",
+                (user_id, days, limit),
+            )
+            return cur.fetchall()
+    finally:
+        conn.close()
+
+
+def delete_old_tasks(days: int = 7) -> int:
+    """删除超过 N 天的任务记录，返回删除数量"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            affected = cur.execute(
+                "DELETE FROM gen_tasks WHERE created_at < NOW() - INTERVAL %s DAY",
+                (days,),
+            )
+        conn.commit()
+        return affected
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"delete_old_tasks error: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def store_verification_code(email: str, code: str, expire_minutes: int = 5) -> None:
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE email_verification_codes SET used = 1 WHERE email = %s AND used = 0",
+                (email.lower(),),
+            )
+            cur.execute(
+                "INSERT INTO email_verification_codes (email, code, expires_at) "
+                "VALUES (%s, %s, DATE_ADD(NOW(), INTERVAL %s MINUTE))",
+                (email.lower(), code, expire_minutes),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def verify_email_code(email: str, code: str) -> bool:
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM email_verification_codes "
+                "WHERE email = %s AND code = %s AND used = 0 AND expires_at > NOW()",
+                (email.lower(), code),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            cur.execute(
+                "UPDATE email_verification_codes SET used = 1 WHERE id = %s",
+                (row["id"],),
+            )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
 def get_transactions(user_id: int, limit: int = 50) -> list:
     conn = get_conn()
     try:
