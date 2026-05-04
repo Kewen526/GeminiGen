@@ -13,10 +13,22 @@ GeminiGen 平台 — 本地 Worker
 
 from __future__ import annotations
 
-import os
 import sys
-import argparse
 import pathlib
+
+# ── 修复 platform 模块冲突 ─────────────────────────────────────
+# Python 把脚本所在目录插入 sys.path[0]，导致本地 platform/ 包
+# 遮蔽 stdlib platform，引发 zstandard/urllib3 AttributeError。
+# 解决：先移除项目根目录，导入所有外部包后再恢复。
+_project_root = str(pathlib.Path(__file__).resolve().parent)
+while _project_root in sys.path:
+    sys.path.remove(_project_root)
+
+import os          # noqa: E402
+import requests    # noqa: E402
+import pymysql     # noqa: E402
+
+sys.path.insert(0, _project_root)
 
 # ── 加载 .env ──────────────────────────────────────────────────
 _env_path = pathlib.Path(__file__).with_name(".env")
