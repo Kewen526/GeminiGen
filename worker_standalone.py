@@ -25,6 +25,7 @@ while _project_root in sys.path:
     sys.path.remove(_project_root)
 
 import os          # noqa: E402
+import argparse    # noqa: E402
 import requests    # noqa: E402
 import pymysql     # noqa: E402
 
