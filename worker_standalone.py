@@ -319,10 +319,10 @@ def process_task(task, worker_id):
         if not scene_local:
             try:
                 scene_local = _get_random_scene_photo()
-            except FileNotFoundError as e:
-                fail_task(task_id, f"场景图获取失败: {e}")
-                cleanup(*temp_files)
-                return
+            except FileNotFoundError:
+                # 没有场景图目录时，用商品图本身作为场景图
+                logger.info("  未找到场景图目录，使用商品图作为场景图")
+                scene_local = product_local
 
         # 3. 生成（最多 3 次）
         final_url   = None
@@ -335,7 +335,7 @@ def process_task(task, worker_id):
                 try:
                     scene_local = _get_random_scene_photo()
                 except Exception:
-                    pass
+                    scene_local = product_local  # fallback：用商品图
 
             success, thumb_url, error_type = gemini_gen.run_task(
                 scene_photo=scene_local,
