@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..models import BalanceResponse, AdminRechargeRequest, TransactionResponse
 from ..auth import get_current_user, require_admin
+from ..config import POINTS_PER_YUAN
 from .. import database as db
 
 router = APIRouter(prefix="/v1", tags=["余额"])
@@ -11,7 +12,8 @@ router = APIRouter(prefix="/v1", tags=["余额"])
 @router.get("/balance", response_model=BalanceResponse)
 def get_balance(current_user: dict = Depends(get_current_user)):
     user = db.get_user_by_id(current_user["id"])
-    return BalanceResponse(balance=float(user["balance"]))
+    balance = float(user["balance"])
+    return BalanceResponse(balance=balance, points=int(balance * POINTS_PER_YUAN))
 
 
 @router.get("/transactions")

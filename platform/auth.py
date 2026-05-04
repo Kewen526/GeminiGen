@@ -127,8 +127,9 @@ class RateLimiter:
 
 
 # 全局限流器实例
-auth_ip_limiter      = RateLimiter(max_calls=AUTH_RATE_LIMIT,     period_seconds=60)
+auth_ip_limiter       = RateLimiter(max_calls=AUTH_RATE_LIMIT,     period_seconds=60)
 generate_user_limiter = RateLimiter(max_calls=GENERATE_RATE_LIMIT, period_seconds=60)
+task_poll_limiter     = RateLimiter(max_calls=60,                   period_seconds=60)
 
 
 # ── 登录锁定 ──────────────────────────────────────────────────

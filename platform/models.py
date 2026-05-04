@@ -55,6 +55,8 @@ class UserResponse(BaseModel):
     total_tasks: int
     avatar_url: Optional[str] = None
     email_verified: bool = False
+    monthly_spend_points: int = 0
+    max_concurrent: int = 1
 
 
 # ── API Key ───────────────────────────────────────────────────
@@ -131,7 +133,7 @@ class TaskResponse(BaseModel):
 # ── 余额 ──────────────────────────────────────────────────────
 class BalanceResponse(BaseModel):
     balance: float
-    points: int
+    points: int = 0
 
 
 class AdminRechargeRequest(BaseModel):

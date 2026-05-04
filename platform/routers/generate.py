@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 
 from ..models import GenerateRequest, TaskResponse
-from ..auth import get_current_user, generate_user_limiter, get_max_concurrent
+from ..auth import get_current_user, generate_user_limiter, task_poll_limiter, get_max_concurrent
 from ..config import MODEL_PRICES, DEFAULT_MODEL, TEMP_DIR, SENSITIVE_WORDS, POINTS_PER_YUAN
 from .. import database as db
 from ..upload_helper import save_upload_to_url
@@ -158,7 +158,9 @@ async def generate_upload(
 
 # ── 查询任务状态 ──────────────────────────────────────────────
 @router.get("/tasks/{task_id}", response_model=TaskResponse)
-def get_task(task_id: str, current_user: dict = Depends(get_current_user)):
+def get_task(task_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+    if not task_poll_limiter.is_allowed(str(current_user["id"])):
+        raise HTTPException(status_code=429, detail="轮询过于频繁，请稍后再试")
     row = db.get_task(task_id)
     if not row:
         raise HTTPException(status_code=404, detail="任务不存在")

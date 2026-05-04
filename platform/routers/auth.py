@@ -10,6 +10,7 @@ from ..models import (
 from ..auth import (
     hash_password, verify_password, create_access_token, get_current_user,
     auth_ip_limiter, login_lockout, generate_code, send_verification_email,
+    get_max_concurrent,
 )
 from ..config import SMTP_ENABLED, POINTS_PER_YUAN
 from .. import database as db
@@ -120,6 +121,7 @@ def me(current_user: dict = Depends(get_current_user)):
     if not user:
         raise HTTPException(status_code=404, detail="用户不存在")
     balance = float(user["balance"])
+    monthly_spend_yuan = db.get_user_monthly_spend(current_user["id"])
     return UserResponse(
         id=user["id"],
         email=user["email"],
@@ -129,6 +131,8 @@ def me(current_user: dict = Depends(get_current_user)):
         total_tasks=user["total_tasks"],
         avatar_url=user.get("avatar_url"),
         email_verified=bool(user.get("email_verified", 0)),
+        monthly_spend_points=int(monthly_spend_yuan * POINTS_PER_YUAN),
+        max_concurrent=get_max_concurrent(monthly_spend_yuan),
     )
 
 
