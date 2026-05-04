@@ -819,6 +819,7 @@ let currentRatio = '1:1';
 let currentFmt   = 'PNG';
 let currentRes   = '1K';
 let progValue    = 0;
+let selectedFile = null;
 
 const QUICK_PROMPTS = [
   '一只在樱花树下休息的橙色猫咪，水彩画风格',
@@ -1030,6 +1031,7 @@ function onDrop(e) {
 }
 function onFileSelect(e) { const f = e.target.files[0]; if (f) setFile(f); }
 function setFile(file) {
+  selectedFile = file;
   const r = new FileReader();
   r.onload = ev => {
     document.getElementById('previewImg').src = ev.target.result;
@@ -1040,6 +1042,7 @@ function setFile(file) {
 }
 function clearUpload(e) {
   e.stopPropagation();
+  selectedFile = null;
   document.getElementById('fileInput').value = '';
   document.getElementById('previewImg').src = '';
   document.getElementById('uploadPreview').style.display = 'none';
@@ -1069,9 +1072,8 @@ async function startGenerate() {
     fd.append('aspect_ratio', currentRatio);
     fd.append('resolution',   currentRes);
     fd.append('output_format', currentFmt);
-    const fileInput = document.getElementById('fileInput');
-    if (fileInput.files && fileInput.files[0]) {
-      fd.append('product_image', fileInput.files[0]);
+    if (selectedFile) {
+      fd.append('product_image', selectedFile);
     }
 
     const res = await fetch(API + '/v1/generate/upload', {
