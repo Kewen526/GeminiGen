@@ -140,6 +140,11 @@ try:
             "ALTER TABLE platform_users ADD COLUMN avatar_url VARCHAR(500) DEFAULT NULL",
             "ALTER TABLE platform_users ADD COLUMN email_verified TINYINT NOT NULL DEFAULT 0",
             "ALTER TABLE platform_users MODIFY COLUMN password_hash VARCHAR(255) DEFAULT NULL",
+            # 视频生成支持
+            "ALTER TABLE gen_tasks ADD COLUMN task_type VARCHAR(10) NOT NULL DEFAULT 'image' AFTER model",
+            "ALTER TABLE gen_tasks ADD COLUMN result_video_url VARCHAR(1000) AFTER result_image_url",
+            "ALTER TABLE gen_tasks ADD COLUMN video_duration INT DEFAULT NULL AFTER result_video_url",
+            "ALTER TABLE gen_tasks ADD COLUMN video_mode_image VARCHAR(20) DEFAULT NULL AFTER video_duration",
         ]
         for sql in migrations:
             try:
