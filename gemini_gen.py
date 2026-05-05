@@ -923,14 +923,16 @@ class _TokenManager(threading.Thread):
 
     # ── 提交队列 ──────────────────────────────────────────────
 
-    def submit_generate(self, prompt_text, aspect_ratio, resolution, model=None, timeout=300):
+    def submit_generate(self, prompt_text, aspect_ratio, resolution, model=None,
+                        timeout=300, reference_images=None):
         """Worker线程调用：排队等待提交生成任务"""
         if model is None:
             model = MODEL_PRIMARY
         event      = threading.Event()
         result_box = [None]
         with self._gen_queue_lock:
-            self._gen_queue.append((event, result_box, prompt_text, aspect_ratio, resolution, model))
+            self._gen_queue.append((event, result_box, prompt_text, aspect_ratio,
+                                    resolution, model, reference_images))
             qlen = len(self._gen_queue)
         self._gen_queue_ready.set()
         if qlen > 1:
@@ -941,16 +943,18 @@ class _TokenManager(threading.Thread):
         return (0, None, "browser_timeout")
 
     def _execute_browser_gen(self, item):
-        event, result_box, prompt_text, aspect_ratio, resolution, model = item
+        event, result_box, prompt_text, aspect_ratio, resolution, model, reference_images = item
         try:
-            result_box[0] = self._do_generate(prompt_text, aspect_ratio, resolution, model)
+            result_box[0] = self._do_generate(prompt_text, aspect_ratio, resolution, model,
+                                              reference_images=reference_images)
         except Exception as e:
             logger.error(f"TokenManager._execute_browser_gen 异常: {e}")
             result_box[0] = (0, None, "browser_exception")
         finally:
             event.set()
 
-    def _do_generate(self, prompt_text, aspect_ratio, resolution, model=MODEL_PRIMARY):
+    def _do_generate(self, prompt_text, aspect_ratio, resolution, model=MODEL_PRIMARY,
+                     reference_images=None):
         """
         提交 generate_image 请求。
         方案A：Python requests + Python 生成的 guard-id（GuardIdGenerator 就绪时）
@@ -975,7 +979,8 @@ class _TokenManager(threading.Thread):
             guard_id = self._guard_gen.generate("/api/generate_image", "post")
             logger.info(f"  [Python] 提交 generate_image  ts={ts_token[:8]}  guard_id={guard_id[:20]}...")
             status_code, task_uuid, err = _api_generate_http(
-                token, guard_id, ts_token, prompt_text, aspect_ratio, resolution, model
+                token, guard_id, ts_token, prompt_text, aspect_ratio, resolution, model,
+                reference_images=reference_images
             )
             if err == "TURNSTILE_INVALID":
                 _turnstile_on_skip_fail()
@@ -987,7 +992,8 @@ class _TokenManager(threading.Thread):
                     return (status_code, None, "turnstile_capsolver_failed")
                 guard_id = self._guard_gen.generate("/api/generate_image", "post")
                 status_code, task_uuid, err = _api_generate_http(
-                    token, guard_id, ts_token, prompt_text, aspect_ratio, resolution, model
+                    token, guard_id, ts_token, prompt_text, aspect_ratio, resolution, model,
+                    reference_images=reference_images
                 )
             if err == "" and task_uuid:
                 _turnstile_on_success()
@@ -1000,7 +1006,8 @@ class _TokenManager(threading.Thread):
             if not self._is_context_alive():
                 return (0, None, "browser_dead")
         status_code, task_uuid, err = self._do_browser_fetch(
-            token, prompt_text, aspect_ratio, resolution, ts_token, model
+            token, prompt_text, aspect_ratio, resolution, ts_token, model,
+            reference_images=reference_images
         )
         if err == "TURNSTILE_INVALID":
             _turnstile_on_skip_fail()
@@ -1011,19 +1018,41 @@ class _TokenManager(threading.Thread):
                 logger.error(f"  CapSolver 重试获取失败: {e}")
                 return (status_code, None, "turnstile_capsolver_failed")
             status_code, task_uuid, err = self._do_browser_fetch(
-                token, prompt_text, aspect_ratio, resolution, ts_token, model
+                token, prompt_text, aspect_ratio, resolution, ts_token, model,
+                reference_images=reference_images
             )
         if err == "" and task_uuid:
             _turnstile_on_success()
         return (status_code, task_uuid, err)
 
     def _do_browser_fetch(self, token, prompt_text, aspect_ratio, resolution,
-                          ts_token="skip", model=MODEL_PRIMARY):
-        """在浏览器内执行 ab() 生成 x-guard-id，然后用 fetch 提交（无文件上传）"""
+                          ts_token="skip", model=MODEL_PRIMARY, reference_images=None):
+        """在浏览器内执行 ab() 生成 x-guard-id，然后用 fetch 提交（含参考图）"""
+        import base64
+
+        encoded_images = []
+        if reference_images:
+            for img_path in reference_images[:5]:
+                if img_path and os.path.exists(img_path):
+                    try:
+                        with open(img_path, "rb") as fh:
+                            raw = fh.read()
+                        ext  = os.path.splitext(img_path)[1].lower()
+                        mime = ("image/png" if ext == ".png"
+                                else "image/webp" if ext == ".webp"
+                                else "image/jpeg")
+                        encoded_images.append({
+                            "name": os.path.basename(img_path),
+                            "b64":  base64.b64encode(raw).decode("ascii"),
+                            "mime": mime,
+                        })
+                    except Exception as e:
+                        logger.warning(f"  [Browser] 读取参考图失败 {img_path}: {e}")
+
         try:
             result = self._page.evaluate("""
                 async function(args) {
-                    const {token, prompt, aspectRatio, resolution, tsToken, model} = args;
+                    const {token, prompt, aspectRatio, resolution, tsToken, model, refImages} = args;
 
                     async function G3(str) {
                         const data = new TextEncoder().encode(str);
@@ -1115,6 +1144,15 @@ class _TokenManager(threading.Thread):
                     fd.append('resolution',      resolution);
                     fd.append('turnstile_token', tsToken);
 
+                    if (refImages && refImages.length > 0) {
+                        for (const img of refImages) {
+                            const bytes = Uint8Array.from(atob(img.b64), c => c.charCodeAt(0));
+                            const blob  = new Blob([bytes], {type: img.mime});
+                            const file  = new File([blob], img.name, {type: img.mime});
+                            fd.append('images', file, img.name);
+                        }
+                    }
+
                     try {
                         const guardId = await ab('/api/generate_image', 'post');
                         const r = await fetch('https://api.geminigen.ai/api/generate_image', {
@@ -1134,6 +1172,7 @@ class _TokenManager(threading.Thread):
                 "token": token, "prompt": prompt_text,
                 "aspectRatio": aspect_ratio, "resolution": resolution,
                 "tsToken": ts_token, "model": model,
+                "refImages": encoded_images,
             })
         except Exception as e:
             logger.error(f"  [Browser] page.evaluate 异常: {e}")
@@ -1423,10 +1462,12 @@ def _solve_turnstile():
 # Python HTTP 提交（GuardIdGenerator 就绪时使用）
 # ============================================================
 def _api_generate_http(token, guard_id, turnstile_token, prompt_text,
-                       aspect_ratio="1:1", resolution="1K", model=MODEL_PRIMARY):
+                       aspect_ratio="1:1", resolution="1K", model=MODEL_PRIMARY,
+                       reference_images=None):
     url     = f"{API_BASE}/generate_image"
     headers = _build_headers(token, guard_id)
-    logger.info(f"  [Python] ratio={aspect_ratio}  res={resolution}  model={model}  guard={guard_id[:20]}...")
+    n_imgs  = len(reference_images) if reference_images else 0
+    logger.info(f"  [Python] ratio={aspect_ratio}  res={resolution}  model={model}  imgs={n_imgs}  guard={guard_id[:20]}...")
 
     data = {
         "prompt":          prompt_text,
@@ -1436,17 +1477,46 @@ def _api_generate_http(token, guard_id, turnstile_token, prompt_text,
         "resolution":      resolution,
         "turnstile_token": turnstile_token,
     }
-    for a in range(1, NET_RETRY_COUNT + 1):
-        try:
-            resp = req_lib.post(url, headers=headers, data=data, timeout=120,
-                                proxies={"http": None, "https": None})
-            break
-        except (ReqConnectionError, Timeout, ConnectionError, OSError) as e:
-            if a < NET_RETRY_COUNT:
-                logger.warning(f"  网络错误(第{a}次): {e}, 重试...")
-                time.sleep(NET_RETRY_DELAY)
-            else:
-                raise
+
+    open_handles = []
+    files = None
+    if reference_images:
+        files = []
+        for img_path in reference_images[:5]:
+            if img_path and os.path.exists(img_path):
+                try:
+                    fh = open(img_path, "rb")
+                    open_handles.append(fh)
+                    ext  = os.path.splitext(img_path)[1].lower()
+                    mime = ("image/png" if ext == ".png"
+                            else "image/webp" if ext == ".webp"
+                            else "image/jpeg")
+                    files.append(("images", (os.path.basename(img_path), fh, mime)))
+                except Exception as e:
+                    logger.warning(f"  [Python] 打开参考图失败 {img_path}: {e}")
+        if not files:
+            files = None
+
+    try:
+        for a in range(1, NET_RETRY_COUNT + 1):
+            try:
+                resp = req_lib.post(url, headers=headers, data=data,
+                                    files=files if files else None,
+                                    timeout=120,
+                                    proxies={"http": None, "https": None})
+                break
+            except (ReqConnectionError, Timeout, ConnectionError, OSError) as e:
+                if a < NET_RETRY_COUNT:
+                    logger.warning(f"  网络错误(第{a}次): {e}, 重试...")
+                    time.sleep(NET_RETRY_DELAY)
+                else:
+                    raise
+    finally:
+        for fh in open_handles:
+            try:
+                fh.close()
+            except Exception:
+                pass
 
     logger.info(f"  API响应: HTTP {resp.status_code}")
     return _TokenManager._parse_generate_response(resp.status_code, resp.text)
@@ -1580,14 +1650,15 @@ def _download_image(url, save_path):
 # 对外主接口
 # ============================================================
 def run_task(save_path, prompt_text, model=MODEL_PRIMARY,
-             aspect_ratio="1:1", resolution="1K"):
+             aspect_ratio="1:1", resolution="1K", reference_images=None):
     """
     提交一个图片生成任务并等待结果。
-    save_path:    生成结果图片的本地保存路径
-    prompt_text:  用户的文字描述
-    model:        nano-banana-2 或 nano-banana-pro
-    aspect_ratio: 1:1 / 16:9 / 9:16 / 3:4 / 4:3
-    resolution:   1K / 2K / 4K
+    save_path:        生成结果图片的本地保存路径
+    prompt_text:      用户的文字描述
+    model:            nano-banana-2 或 nano-banana-pro
+    aspect_ratio:     1:1 / 16:9 / 9:16 / 3:4 / 4:3
+    resolution:       1K / 2K / 4K
+    reference_images: 本地图片路径列表（最多5张），作为参考图上传
     返回: (success: bool, thumbnail_url: str|None, error_type: str)
     """
     MAX_SUBMIT_RETRY = 10
@@ -1610,10 +1681,12 @@ def run_task(save_path, prompt_text, model=MODEL_PRIMARY,
                 logger.error("  Token 获取失败，等待10秒重试...")
                 time.sleep(10); continue
 
-            logger.info(f"提交任务  ratio={aspect_ratio}  res={resolution}  model={current_model}  attempt={submit_attempt}/{MAX_SUBMIT_RETRY}")
+            n_imgs = len(reference_images) if reference_images else 0
+            logger.info(f"提交任务  ratio={aspect_ratio}  res={resolution}  model={current_model}  imgs={n_imgs}  attempt={submit_attempt}/{MAX_SUBMIT_RETRY}")
             try:
                 status_code, task_uuid, submit_error = _get_token_manager().submit_generate(
-                    prompt_text, aspect_ratio, resolution, model=current_model
+                    prompt_text, aspect_ratio, resolution, model=current_model,
+                    reference_images=reference_images
                 )
             except Exception as e:
                 if _is_network_error(e):
@@ -1646,7 +1719,8 @@ def run_task(save_path, prompt_text, model=MODEL_PRIMARY,
                 current_model = model or _get_current_model()
                 try:
                     status_code, task_uuid, submit_error = _get_token_manager().submit_generate(
-                        prompt_text, aspect_ratio, resolution, model=current_model
+                        prompt_text, aspect_ratio, resolution, model=current_model,
+                        reference_images=reference_images
                     )
                 except Exception as e:
                     if _is_network_error(e):

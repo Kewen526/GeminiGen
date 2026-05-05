@@ -87,6 +87,7 @@ def _process_task(task: dict, worker_id: int) -> None:
     os.makedirs(TEMP_DIR, exist_ok=True)
     product_local   = os.path.join(TEMP_DIR, f"prod_{task_id}.jpg")
     generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.png")
+    scene_local     = None
 
     try:
         # 1. 下载主体图
@@ -112,14 +113,15 @@ def _process_task(task: dict, worker_id: int) -> None:
         # 3. 提示词
         final_prompt = prompt if prompt else PROMPT_UNIFIED
 
-        # 4. 生成
-        logger.info(f"[W{worker_id}] 调用生成接口...")
+        # 4. 生成（product 为主体图放首位，scene 为场景图次之）
+        ref_imgs = [p for p in [product_local, scene_local] if p and os.path.exists(p)]
+
+        logger.info(f"[W{worker_id}] 调用生成接口...  参考图={len(ref_imgs)}张")
         success, thumb_url, error_type = gemini_gen.run_task(
-            scene_photo=scene_local,
-            product_image=product_local,
             save_path=generated_local,
             prompt_text=final_prompt,
             model=model,
+            reference_images=ref_imgs if ref_imgs else None,
         )
 
         if error_type == "IMAGE_FORMAT_ERROR":
@@ -149,7 +151,7 @@ def _process_task(task: dict, worker_id: int) -> None:
         import traceback; traceback.print_exc()
         db.fail_task(task_id, str(e)[:400], refund=True)
     finally:
-        for p in [product_local, generated_local]:
+        for p in [product_local, scene_local, generated_local]:
             try:
                 if p and os.path.exists(p):
                     os.remove(p)
