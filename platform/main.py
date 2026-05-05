@@ -10,8 +10,7 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from .routers import auth, generate, balance, apikeys
 from .config import HOST, PORT
@@ -26,12 +25,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-
 
 # ── 定时清理（每 24h 删除 7 天前的任务记录）─────────────────
 async def _cleanup_loop():
-    await asyncio.sleep(3600)  # 启动 1h 后首次运行
+    await asyncio.sleep(3600)
     while True:
         try:
             n = db.delete_old_tasks(days=7)
@@ -93,7 +90,6 @@ app.add_middleware(
 
 # ── IP 限流中间件（针对 /auth/ 接口）────────────────────────
 _ip_requests: dict[str, list] = {}
-_ip_lock_time: dict[str, float] = {}
 
 @app.middleware("http")
 async def auth_rate_limit_middleware(request: Request, call_next):
@@ -103,7 +99,7 @@ async def auth_rate_limit_middleware(request: Request, call_next):
         now = time.time()
         reqs = _ip_requests.get(ip, [])
         reqs = [t for t in reqs if now - t < 60]
-        if len(reqs) >= 30:  # 每分钟最多 30 次 auth 请求/IP
+        if len(reqs) >= 30:
             return JSONResponse({"detail": "请求过于频繁，请 1 分钟后再试"}, status_code=429)
         reqs.append(now)
         _ip_requests[ip] = reqs
@@ -115,36 +111,6 @@ app.include_router(auth.router)
 app.include_router(generate.router)
 app.include_router(balance.router)
 app.include_router(apikeys.router)
-
-# 静态文件
-if os.path.isdir(STATIC_DIR):
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-
-# ── 前端页面路由 ──────────────────────────────────────────────
-@app.get("/", include_in_schema=False)
-def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
-
-
-@app.get("/dashboard", include_in_schema=False)
-def dashboard():
-    return FileResponse(os.path.join(STATIC_DIR, "dashboard.html"))
-
-
-@app.get("/generate", include_in_schema=False)
-def generate_page():
-    return FileResponse(os.path.join(STATIC_DIR, "generate.html"))
-
-
-@app.get("/app/imagen", include_in_schema=False)
-def app_imagen():
-    return FileResponse(os.path.join(STATIC_DIR, "generate.html"))
-
-
-@app.get("/docs-page", include_in_schema=False)
-def docs_page():
-    return FileResponse(os.path.join(STATIC_DIR, "docs.html"))
 
 
 @app.get("/health")
