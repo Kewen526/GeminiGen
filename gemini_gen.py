@@ -566,6 +566,9 @@ class _TokenManager(threading.Thread):
         self._gen_queue_lock  = threading.Lock()
         self._gen_queue_ready = threading.Event()
 
+        self._video_queue      = []
+        self._video_queue_lock = threading.Lock()
+
     # ── 公共接口 ──────────────────────────────────────────────
 
     def get_token(self, force_refresh=False, stale_token=None, timeout=300):
@@ -642,6 +645,14 @@ class _TokenManager(threading.Thread):
                         item = self._gen_queue.pop(0)
                 if item is None: break
                 self._execute_browser_gen(item)
+
+            while True:
+                item = None
+                with self._video_queue_lock:
+                    if self._video_queue:
+                        item = self._video_queue.pop(0)
+                if item is None: break
+                self._execute_browser_video(item)
 
             if self._refresh_request.is_set():
                 self._refresh_request.clear()
@@ -956,6 +967,251 @@ class _TokenManager(threading.Thread):
             result_box[0] = (0, None, "browser_exception")
         finally:
             event.set()
+
+    def submit_video_browser(self, model, prompt_text, aspect_ratio, resolution,
+                             duration, enhance_prompt, mode_image,
+                             ref_image_path=None, timeout=600):
+        """Worker线程调用：用浏览器 fetch 提交视频生成（GuardIdGenerator 未就绪时降级）"""
+        event      = threading.Event()
+        result_box = [None]
+        with self._video_queue_lock:
+            self._video_queue.append((event, result_box, model, prompt_text,
+                                      aspect_ratio, resolution, duration,
+                                      enhance_prompt, mode_image, ref_image_path))
+        self._gen_queue_ready.set()
+        if event.wait(timeout=timeout):
+            return result_box[0] or (0, None, "empty_result")
+        logger.error(f"TokenManager.submit_video_browser: 超时 ({timeout}s)")
+        return (0, None, "browser_timeout")
+
+    def _execute_browser_video(self, item):
+        (event, result_box, model, prompt_text, aspect_ratio, resolution,
+         duration, enhance_prompt, mode_image, ref_image_path) = item
+        try:
+            with self._state_lock:
+                token = self._token
+            if not token:
+                result_box[0] = (0, None, "no_token")
+                return
+            ts_token = _get_turnstile_token()
+            result_box[0] = self._do_browser_fetch_video(
+                token, model, prompt_text, aspect_ratio, resolution,
+                duration, enhance_prompt, mode_image, ts_token, ref_image_path,
+            )
+        except Exception as e:
+            logger.error(f"TokenManager._execute_browser_video 异常: {e}")
+            result_box[0] = (0, None, "browser_exception")
+        finally:
+            event.set()
+
+    def _do_browser_fetch_video(self, token, model, prompt_text, aspect_ratio,
+                                resolution, duration, enhance_prompt, mode_image,
+                                ts_token="skip", ref_image_path=None):
+        """在浏览器内用 ab() 生成 x-guard-id，提交视频生成请求"""
+        import base64 as _b64
+        ref_image_data = None
+        if ref_image_path and os.path.exists(ref_image_path):
+            try:
+                with open(ref_image_path, "rb") as fh:
+                    raw = fh.read()
+                ext  = os.path.splitext(ref_image_path)[1].lower()
+                mime = ("image/png" if ext == ".png"
+                        else "image/webp" if ext == ".webp"
+                        else "image/jpeg")
+                ref_image_data = {
+                    "name": os.path.basename(ref_image_path),
+                    "b64":  _b64.b64encode(raw).decode("ascii"),
+                    "mime": mime,
+                }
+            except Exception as e:
+                logger.warning(f"  [Browser-Video] 读取参考图失败: {e}")
+
+        if model == "grok-video":
+            api_url  = f"{API_BASE}/video-gen/grok-stream"
+            api_path = "/api/video-gen/grok-stream"
+            _ar_map  = {"16:9": "landscape", "9:16": "portrait", "1:1": "square"}
+            mapped_ar = _ar_map.get(aspect_ratio, aspect_ratio)
+        else:
+            api_url   = f"{API_BASE}/video-gen/veo"
+            api_path  = "/api/video-gen/veo"
+            mapped_ar = aspect_ratio
+
+        try:
+            result = self._page.evaluate("""
+                async function(args) {
+                    const {token, model, prompt, aspectRatio, resolution, duration,
+                           enhancePrompt, modeImage, tsToken, apiUrl, apiPath, refImage} = args;
+
+                    async function G3(str) {
+                        const data = new TextEncoder().encode(str);
+                        const buf  = await crypto.subtle.digest('SHA-256', data);
+                        return Array.from(new Uint8Array(buf))
+                            .map(b => b.toString(16).padStart(2,'0')).join('');
+                    }
+                    function bm(hex) {
+                        const arr = [];
+                        for (let i = 0; i < hex.length; i += 2)
+                            arr.push(parseInt(hex.substr(i, 2), 16));
+                        return arr;
+                    }
+                    function lY(n) {
+                        return [(n>>>24)&255, (n>>>16)&255, (n>>>8)&255, n&255];
+                    }
+                    function IY(bytes) {
+                        return btoa(String.fromCharCode(...bytes))
+                            .replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
+                    }
+                    async function fY() {
+                        const KEY   = 'guard_stable_id';
+                        const VALID = /^[A-Za-z0-9_-]{22}$/;
+                        try {
+                            const cached = localStorage.getItem(KEY);
+                            if (cached && VALID.test(cached)) return cached;
+                        } catch(e) {}
+                        const rand  = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+                                          .map(b=>b.toString(16).padStart(2,'0')).join('');
+                        const ua    = navigator.userAgent || 'unknown';
+                        const sc    = (screen.width||0) + 'x' + (screen.height||0);
+                        const hash  = await G3('default:' + rand + ':' + ua + ':' + sc);
+                        const newId = IY(bm(hash)).slice(0, 22);
+                        try { localStorage.setItem(KEY, newId); } catch(e) {}
+                        return newId;
+                    }
+                    async function EY() {
+                        function G4(e) {
+                            let i = 0;
+                            const t = String(e);
+                            for (let s = 0; s < t.length; s++) i = i*31 + t.charCodeAt(s) | 0;
+                            return i >>> 0;
+                        }
+                        const parts = [
+                            navigator.userAgent,
+                            screen.width + 'x' + screen.height,
+                            screen.colorDepth,
+                            navigator.language,
+                            navigator.hardwareConcurrency || 0,
+                            Intl.DateTimeFormat().resolvedOptions().timeZone || '',
+                        ];
+                        let combined = parts.map(p => {
+                            const l = G4(String(p)).toString(2);
+                            return G4(l).toString(16);
+                        }).join('').replace(/[.-]/g,'');
+                        return await G3(combined);
+                    }
+                    async function ab(path, method) {
+                        const stableId   = await fY();
+                        const timeBucket = Math.floor(Date.now() / 60000);
+                        const domFp      = await EY();
+                        let secretKey = '';
+                        try {
+                            const el  = document.getElementById('__nuxt');
+                            const app = el && el.__vue_app__;
+                            if (app) {
+                                const cfg = app.config.globalProperties.$config;
+                                secretKey = (cfg && cfg.public && cfg.public.antibot &&
+                                             cfg.public.antibot.secretKey) || '';
+                            }
+                        } catch(e) {}
+                        const u  = (await G3(secretKey + ':' + stableId)).slice(0, 32);
+                        const c  = await G3(path + ':' + method.toUpperCase()
+                                           + ':' + u + ':' + timeBucket + ':' + secretKey);
+                        const buf = new Uint8Array(85);
+                        buf[0] = 1;
+                        bm(u).forEach((v,i)  => buf[i+1]  = v);
+                        lY(timeBucket).forEach((v,i) => buf[i+17] = v);
+                        bm(c).forEach((v,i)  => buf[i+21] = v);
+                        bm(domFp).forEach((v,i) => buf[i+53] = v);
+                        return IY(Array.from(buf));
+                    }
+
+                    const fd = new FormData();
+                    fd.append('prompt',          prompt);
+                    fd.append('model',           model);
+                    fd.append('aspect_ratio',    aspectRatio);
+                    fd.append('turnstile_token', tsToken);
+
+                    if (model === 'grok-video') {
+                        fd.append('resolution', resolution || '480p');
+                        fd.append('duration',   String(duration || 6));
+                        fd.append('mode',       'custom');
+                    } else {
+                        fd.append('enhance_prompt', enhancePrompt ? 'true' : 'false');
+                        fd.append('duration',       String(duration || 8));
+                        fd.append('resolution',     resolution || '1080p');
+                        fd.append('mode_image',     modeImage || 'ingredient');
+                        if (refImage) {
+                            const bytes = Uint8Array.from(atob(refImage.b64), c => c.charCodeAt(0));
+                            const blob  = new Blob([bytes], {type: refImage.mime});
+                            const file  = new File([blob], refImage.name, {type: refImage.mime});
+                            fd.append('ref_images', file, refImage.name);
+                        } else {
+                            fd.append('ref_images', '');
+                        }
+                    }
+
+                    try {
+                        const guardId = await ab(apiPath, 'post');
+                        const r = await fetch(apiUrl, {
+                            method:  'POST',
+                            headers: {
+                                'authorization': 'Bearer ' + token,
+                                'x-guard-id':    guardId,
+                            },
+                            body: fd,
+                        });
+                        return {status: r.status, body: await r.text()};
+                    } catch(e) {
+                        return {status: 0, error: String(e)};
+                    }
+                }
+            """, {
+                "token": token, "model": model, "prompt": prompt_text,
+                "aspectRatio": mapped_ar, "resolution": resolution,
+                "duration": str(duration or 8),
+                "enhancePrompt": enhance_prompt, "modeImage": mode_image or "ingredient",
+                "tsToken": ts_token, "apiUrl": api_url, "apiPath": api_path,
+                "refImage": ref_image_data,
+            })
+        except Exception as e:
+            logger.error(f"  [Browser-Video] page.evaluate 异常: {e}")
+            return (0, None, "evaluate_error")
+
+        status = result.get("status", 0)
+        body   = result.get("body", "")
+        logger.info(f"  [Browser-Video] 提交响应 HTTP {status}")
+
+        if status == 200:
+            try:
+                data = json.loads(body)
+                history_id = (data.get("history_id") or data.get("id")
+                              or data.get("uuid") or data.get("task_id"))
+                if not history_id:
+                    uuids = re.findall(
+                        r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", body)
+                    history_id = uuids[0] if uuids else None
+                logger.info(f"  [Browser-Video] history_id={history_id}")
+                return (200, history_id, "")
+            except Exception as e:
+                logger.error(f"  [Browser-Video] 解析响应失败: {e}  body={body[:200]}")
+                return (200, None, "parse_error")
+        elif status == 429:
+            _trigger_rate_limit()
+            return (429, None, "RATE_LIMIT")
+        elif status in (401, 403):
+            return (status, None, "TOKEN_EXPIRED")
+        elif status == 400:
+            try:
+                detail = json.loads(body).get("detail", {})
+                ec = (detail.get("error_code") if isinstance(detail, dict) else "") or ""
+                if ec == "TURNSTILE_INVALID":
+                    return (400, None, "TURNSTILE_INVALID")
+            except Exception:
+                pass
+            logger.error(f"  [Browser-Video] HTTP 400: {body[:200]}")
+            return (400, None, "")
+        else:
+            logger.error(f"  [Browser-Video] HTTP {status}: {body[:100]}")
+            return (status, None, "")
 
     def _do_generate(self, prompt_text, aspect_ratio, resolution, model=MODEL_PRIMARY,
                      reference_images=None):
@@ -1892,26 +2148,22 @@ def run_video_task(save_path, prompt_text, model="veo-3-fast",
                 logger.error(f"  [Video] Turnstile 失败: {e}")
                 return (False, None, "turnstile_capsolver_failed")
 
-            _path = "/api/video-gen/grok-stream" if model == "grok-video" else "/api/video-gen/veo"
+            _path    = "/api/video-gen/grok-stream" if model == "grok-video" else "/api/video-gen/veo"
             guard_id = _get_token_manager().get_guard_id(_path, "post")
-            if not guard_id:
-                logger.info("  [Video] guard_id 为空，等待 GuardIdGenerator 就绪（最多60s）...")
-                for _ in range(60):
-                    time.sleep(1)
-                    guard_id = _get_token_manager().get_guard_id(_path, "post")
-                    if guard_id:
-                        break
-                if not guard_id:
-                    logger.warning("  [Video] GuardIdGenerator 超时未就绪，跳过本次提交")
-                    time.sleep(10)
-                    continue
 
-            logger.info(f"  [Video] 提交  model={model}  attempt={attempt}/{MAX_SUBMIT_RETRY}")
-            status_code, history_id, submit_err = _api_submit_video(
-                token, guard_id, ts_token, prompt_text,
-                model, aspect_ratio, resolution, duration,
-                enhance_prompt, mode_image, ref_image_path,
-            )
+            if guard_id:
+                logger.info(f"  [Video] 提交（Python HTTP）  model={model}  attempt={attempt}/{MAX_SUBMIT_RETRY}")
+                status_code, history_id, submit_err = _api_submit_video(
+                    token, guard_id, ts_token, prompt_text,
+                    model, aspect_ratio, resolution, duration,
+                    enhance_prompt, mode_image, ref_image_path,
+                )
+            else:
+                logger.info(f"  [Video] GuardIdGenerator 未就绪，降级浏览器 fetch  model={model}  attempt={attempt}/{MAX_SUBMIT_RETRY}")
+                status_code, history_id, submit_err = _get_token_manager().submit_video_browser(
+                    model, prompt_text, aspect_ratio, resolution, duration,
+                    enhance_prompt, mode_image, ref_image_path,
+                )
 
             if history_id:
                 _turnstile_on_success()
@@ -1926,11 +2178,17 @@ def run_video_task(save_path, prompt_text, model="veo-3-fast",
                     logger.error(f"  [Video] CapSolver 失败: {e}")
                     return (False, None, "turnstile_capsolver_failed")
                 guard_id = _get_token_manager().get_guard_id(_path, "post")
-                status_code, history_id, submit_err = _api_submit_video(
-                    token, guard_id, ts_token, prompt_text,
-                    model, aspect_ratio, resolution, duration,
-                    enhance_prompt, mode_image, ref_image_path,
-                )
+                if guard_id:
+                    status_code, history_id, submit_err = _api_submit_video(
+                        token, guard_id, ts_token, prompt_text,
+                        model, aspect_ratio, resolution, duration,
+                        enhance_prompt, mode_image, ref_image_path,
+                    )
+                else:
+                    status_code, history_id, submit_err = _get_token_manager().submit_video_browser(
+                        model, prompt_text, aspect_ratio, resolution, duration,
+                        enhance_prompt, mode_image, ref_image_path,
+                    )
                 if history_id:
                     _turnstile_on_success()
                     break
