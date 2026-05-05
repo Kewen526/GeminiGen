@@ -871,6 +871,10 @@ class _TokenManager(threading.Thread):
             self._guard_gen = None
 
     def _heartbeat(self):
+        if self._guard_gen is None:
+            logger.debug("TokenManager: 心跳跳过（GuardIdGenerator 未就绪）")
+            return
+
         with self._state_lock:
             token     = self._token
             token_age = time.time() - self._token_time
