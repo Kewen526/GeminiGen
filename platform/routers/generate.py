@@ -5,9 +5,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 
-from ..models import GenerateRequest, TaskResponse
+from ..models import GenerateRequest, VideoGenerateRequest, TaskResponse
 from ..auth import get_current_user, generate_user_limiter, task_poll_limiter, get_max_concurrent
-from ..config import MODEL_PRICES, DEFAULT_MODEL, TEMP_DIR, SENSITIVE_WORDS, POINTS_PER_YUAN
+from ..config import MODEL_PRICES, DEFAULT_MODEL, TEMP_DIR, SENSITIVE_WORDS, POINTS_PER_YUAN, VIDEO_MODELS
 from .. import database as db
 from ..upload_helper import save_upload_to_url
 
@@ -23,9 +23,11 @@ def _task_to_response(row: dict) -> TaskResponse:
         task_id=row["task_id"],
         status=row["status"],
         model=row["model"],
+        task_type=row.get("task_type") or "image",
         cost=cost,
         points_cost=int(cost * POINTS_PER_YUAN) if cost else None,
         result_image_url=row.get("result_image_url"),
+        result_video_url=row.get("result_video_url"),
         error_msg=row.get("error_msg"),
         created_at=_fmt(row["created_at"]),
         updated_at=_fmt(row["updated_at"]),
@@ -182,16 +184,124 @@ def list_tasks(
 
     return [
         {
-            "task_id":          r["task_id"],
-            "model":            r["model"],
-            "status":           r["status"],
-            "cost":             float(r["cost"]) if r.get("cost") else None,
-            "points_cost":      int(float(r["cost"]) * POINTS_PER_YUAN) if r.get("cost") else None,
-            "result_image_url": r.get("result_image_url"),
-            "error_msg":        r.get("error_msg"),
-            "prompt_text":      (r.get("prompt_text") or "")[:60],
-            "created_at":       _fmt(r["created_at"]),
-            "duration_seconds": r.get("duration_seconds"),
+            "task_id":           r["task_id"],
+            "model":             r["model"],
+            "task_type":         r.get("task_type") or "image",
+            "status":            r["status"],
+            "cost":              float(r["cost"]) if r.get("cost") else None,
+            "points_cost":       int(float(r["cost"]) * POINTS_PER_YUAN) if r.get("cost") else None,
+            "result_image_url":  r.get("result_image_url"),
+            "result_video_url":  r.get("result_video_url"),
+            "error_msg":         r.get("error_msg"),
+            "prompt_text":       (r.get("prompt_text") or "")[:60],
+            "created_at":        _fmt(r["created_at"]),
+            "duration_seconds":  r.get("duration_seconds"),
         }
         for r in rows
     ]
+
+
+# ── 视频生成（JSON 提交，API 调用）────────────────────────────
+@router.post("/generate/video", response_model=TaskResponse)
+def generate_video(req: VideoGenerateRequest, request: Request,
+                   current_user: dict = Depends(get_current_user)):
+    _check_rate(request, current_user["id"])
+    _check_prompt(req.prompt)
+    _check_concurrent(current_user["id"])
+
+    if req.model not in VIDEO_MODELS:
+        raise HTTPException(status_code=400, detail=f"不支持的视频模型: {req.model}")
+
+    cost = MODEL_PRICES.get(req.model)
+    if current_user["balance"] < cost:
+        raise HTTPException(
+            status_code=402,
+            detail=f"积分不足，需要 {int(cost * POINTS_PER_YUAN)} 积分"
+        )
+
+    task_id = db.create_task(
+        user_id=current_user["id"],
+        model=req.model,
+        product_image_url=req.ref_image_url or "",
+        scene_image_url="",
+        prompt_text=(req.prompt or "").strip()[:2000],
+        cost=cost,
+        api_key_id=current_user.get("key_id"),
+        aspect_ratio=req.aspect_ratio or "16:9",
+        resolution=req.resolution or "1080p",
+        output_format="MP4",
+        task_type="video",
+        video_duration=req.duration,
+        video_mode_image=req.mode_image,
+    )
+
+    ok = db.deduct_balance(current_user["id"], cost, task_id, f"视频生成 {req.model}")
+    if not ok:
+        db.fail_task(task_id, "余额不足", refund=False)
+        raise HTTPException(status_code=402, detail="积分不足")
+
+    row = db.get_task(task_id)
+    return _task_to_response(row)
+
+
+# ── 视频生成（表单上传，网页使用）─────────────────────────────
+@router.post("/generate/video/upload", response_model=TaskResponse)
+async def generate_video_upload(
+    request: Request,
+    model: str = Form("veo-3-fast"),
+    prompt: str = Form(...),
+    aspect_ratio: Optional[str] = Form("16:9"),
+    resolution: Optional[str] = Form("1080p"),
+    duration: Optional[int] = Form(8),
+    enhance_prompt: Optional[bool] = Form(True),
+    mode_image: Optional[str] = Form("ingredient"),
+    ref_image: Optional[UploadFile] = File(None),
+    current_user: dict = Depends(get_current_user),
+):
+    _check_rate(request, current_user["id"])
+    _check_prompt(prompt)
+    _check_concurrent(current_user["id"])
+
+    if model not in VIDEO_MODELS:
+        model = "veo-3-fast"
+
+    valid_ratios = {"16:9", "9:16", "1:1", "landscape", "portrait", "square"}
+    if aspect_ratio not in valid_ratios:
+        aspect_ratio = "16:9"
+
+    cost = MODEL_PRICES.get(model, MODEL_PRICES["veo-3-fast"])
+    if current_user["balance"] < cost:
+        raise HTTPException(
+            status_code=402,
+            detail=f"积分不足，需要 {int(cost * POINTS_PER_YUAN)} 积分"
+        )
+
+    os.makedirs(TEMP_DIR, exist_ok=True)
+
+    ref_image_url = ""
+    if ref_image and ref_image.filename:
+        ref_image_url = await save_upload_to_url(ref_image, TEMP_DIR)
+
+    task_id = db.create_task(
+        user_id=current_user["id"],
+        model=model,
+        product_image_url=ref_image_url,
+        scene_image_url="",
+        prompt_text=prompt.strip()[:2000],
+        cost=cost,
+        api_key_id=current_user.get("key_id"),
+        aspect_ratio=aspect_ratio,
+        resolution=resolution or "1080p",
+        output_format="MP4",
+        task_type="video",
+        video_duration=duration,
+        video_mode_image=mode_image,
+    )
+
+    ok = db.deduct_balance(current_user["id"], cost, task_id, f"视频生成 {model}")
+    if not ok:
+        db.fail_task(task_id, "余额不足", refund=False)
+        raise HTTPException(status_code=402, detail="积分不足")
+
+    row = db.get_task(task_id)
+    return _task_to_response(row)
