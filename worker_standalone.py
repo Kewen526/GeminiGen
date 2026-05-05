@@ -275,6 +275,8 @@ def process_task(task, worker_id):
     prompt       = task.get("prompt_text") or ""
     aspect_ratio = task.get("aspect_ratio") or "1:1"
     resolution   = task.get("resolution") or "1K"
+    prod_url     = task.get("product_image_url") or ""
+    scene_url    = task.get("scene_image_url") or ""
 
     logger.info(f"[W{worker_id}] 任务开始  task_id={task_id}  model={model}  ratio={aspect_ratio}  res={resolution}")
 
@@ -282,13 +284,23 @@ def process_task(task, worker_id):
     generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.png")
     temp_files = [generated_local]
 
+    # ── 下载参考图（product 优先，scene 次之，最多 5 张）─────────
+    reference_images = []
+    for idx, url in enumerate([u for u in [prod_url, scene_url] if u]):
+        local_path = os.path.join(TEMP_DIR, f"ref_{task_id}_{idx}.jpg")
+        if download_image(url, local_path):
+            reference_images.append(local_path)
+            temp_files.append(local_path)
+        else:
+            logger.warning(f"  [W{worker_id}] 参考图下载失败（跳过）: {url[:80]}")
+
     try:
         # 生成（最多 3 次）
         final_url   = None
         MAX_RETRIES = 3
 
         for attempt in range(1, MAX_RETRIES + 1):
-            logger.info(f"  [W{worker_id}] 生成第 {attempt}/{MAX_RETRIES} 次...")
+            logger.info(f"  [W{worker_id}] 生成第 {attempt}/{MAX_RETRIES} 次...  参考图={len(reference_images)}张")
 
             success, thumb_url, error_type = gemini_gen.run_task(
                 save_path=generated_local,
@@ -296,6 +308,7 @@ def process_task(task, worker_id):
                 model=model,
                 aspect_ratio=aspect_ratio,
                 resolution=resolution,
+                reference_images=reference_images if reference_images else None,
             )
 
             if not success:
