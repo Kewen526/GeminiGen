@@ -1183,8 +1183,8 @@ class _TokenManager(threading.Thread):
         if status == 200:
             try:
                 data = json.loads(body)
-                history_id = (data.get("history_id") or data.get("id")
-                              or data.get("uuid") or data.get("task_id"))
+                history_id = (data.get("uuid") or data.get("history_id")
+                              or data.get("id") or data.get("task_id"))
                 if not history_id:
                     uuids = re.findall(
                         r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", body)
@@ -1977,8 +1977,8 @@ def _api_submit_video(token, guard_id, turnstile_token, prompt_text,
     if resp.status_code == 200:
         try:
             body = resp.json()
-            history_id = (body.get("history_id") or body.get("id")
-                          or body.get("uuid") or body.get("task_id"))
+            history_id = (body.get("uuid") or body.get("history_id")
+                          or body.get("id") or body.get("task_id"))
             if not history_id:
                 uuids = re.findall(
                     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
@@ -2044,13 +2044,14 @@ def _api_poll_video(history_id, save_path):
                 logger.info(f"  [Video] [{elapsed}s] status={status}")
 
                 if status == "success" or status == 2:
-                    video_url = (data.get("result_video_url") or data.get("video_url")
-                                 or data.get("output_url") or data.get("url"))
+                    video_url = None
+                    videos = data.get("generated_video") or []
+                    if videos and isinstance(videos, list):
+                        v = videos[0]
+                        video_url = (v.get("file_download_url") or v.get("video_url"))
                     if not video_url:
-                        # 尝试从 result 字段中提取
-                        result = data.get("result") or {}
-                        if isinstance(result, dict):
-                            video_url = result.get("url") or result.get("video_url")
+                        video_url = (data.get("result_video_url") or data.get("video_url")
+                                     or data.get("output_url") or data.get("url"))
                     if video_url:
                         logger.info(f"  [Video] 生成完成，下载 {video_url[:80]}...")
                         ok = _download_file(video_url, save_path)
