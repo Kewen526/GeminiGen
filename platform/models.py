@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from typing import Optional
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 
 # ── Auth ─────────────────────────────────────────────────────
@@ -143,12 +143,22 @@ class VideoGenerateRequest(BaseModel):
             raise ValueError(f"aspect_ratio 只支持: {', '.join(allowed)}")
         return v or "16:9"
 
-    @field_validator("duration")
-    @classmethod
-    def valid_duration(cls, v):
-        if v is not None and v not in {5, 6, 8, 10}:
-            raise ValueError("duration 只支持 5/6/8/10 秒")
-        return v
+    @model_validator(mode="after")
+    def valid_model_params(self):
+        model = self.model
+        res   = self.resolution
+        dur   = self.duration
+        if model == "grok-video":
+            if res and res not in {"480p"}:
+                raise ValueError("grok-video 只支持 resolution=480p")
+            if dur is not None and dur not in {5, 6}:
+                raise ValueError("grok-video 只支持 duration=5/6 秒")
+        elif model == "veo-3-fast":
+            if res and res not in {"480p", "720p", "1080p"}:
+                raise ValueError("veo-3-fast 只支持 resolution=480p/720p/1080p")
+            if dur is not None and dur not in {5, 8}:
+                raise ValueError("veo-3-fast 只支持 duration=5/8 秒")
+        return self
 
 
 class TaskResponse(BaseModel):

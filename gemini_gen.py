@@ -1895,7 +1895,7 @@ def _download_image(url, save_path):
 # 视频生成 HTTP 提交
 # ============================================================
 VIDEO_POLL_INTERVAL = 10
-VIDEO_GENERATE_TIMEOUT = 900  # 15 分钟
+VIDEO_GENERATE_TIMEOUT = 300  # 5 分钟
 
 def _api_submit_video(token, guard_id, turnstile_token, prompt_text,
                       model, aspect_ratio, resolution, duration,
