@@ -1149,7 +1149,7 @@ class _TokenManager(threading.Thread):
                             const bytes = Uint8Array.from(atob(img.b64), c => c.charCodeAt(0));
                             const blob  = new Blob([bytes], {type: img.mime});
                             const file  = new File([blob], img.name, {type: img.mime});
-                            fd.append('images', file, img.name);
+                            fd.append('files', file, img.name);
                         }
                     }
 
@@ -1491,7 +1491,7 @@ def _api_generate_http(token, guard_id, turnstile_token, prompt_text,
                     mime = ("image/png" if ext == ".png"
                             else "image/webp" if ext == ".webp"
                             else "image/jpeg")
-                    files.append(("images", (os.path.basename(img_path), fh, mime)))
+                    files.append(("files", (os.path.basename(img_path), fh, mime)))
                 except Exception as e:
                     logger.warning(f"  [Python] 打开参考图失败 {img_path}: {e}")
         if not files:
