@@ -1687,8 +1687,7 @@ def _api_submit_video(token, guard_id, turnstile_token, prompt_text,
         if not files:
             data["ref_images"] = ""
 
-    if guard_id:
-        guard_id = _get_token_manager().get_guard_id(path, "post")
+    guard_id = _get_token_manager().get_guard_id(path, "post")
 
     headers = _build_headers(token, guard_id)
 
@@ -1889,10 +1888,19 @@ def run_video_task(save_path, prompt_text, model="veo-3-fast",
                 logger.error(f"  [Video] Turnstile 失败: {e}")
                 return (False, None, "turnstile_capsolver_failed")
 
-            guard_id = _get_token_manager().get_guard_id(
-                "/api/video-gen/grok-stream" if model == "grok-video" else "/api/video-gen/veo",
-                "post"
-            )
+            _path = "/api/video-gen/grok-stream" if model == "grok-video" else "/api/video-gen/veo"
+            guard_id = _get_token_manager().get_guard_id(_path, "post")
+            if not guard_id:
+                logger.info("  [Video] guard_id 为空，等待 GuardIdGenerator 就绪（最多60s）...")
+                for _ in range(60):
+                    time.sleep(1)
+                    guard_id = _get_token_manager().get_guard_id(_path, "post")
+                    if guard_id:
+                        break
+                if not guard_id:
+                    logger.warning("  [Video] GuardIdGenerator 超时未就绪，跳过本次提交")
+                    time.sleep(10)
+                    continue
 
             logger.info(f"  [Video] 提交  model={model}  attempt={attempt}/{MAX_SUBMIT_RETRY}")
             status_code, history_id, submit_err = _api_submit_video(
@@ -1913,10 +1921,7 @@ def run_video_task(save_path, prompt_text, model="veo-3-fast",
                 except Exception as e:
                     logger.error(f"  [Video] CapSolver 失败: {e}")
                     return (False, None, "turnstile_capsolver_failed")
-                guard_id = _get_token_manager().get_guard_id(
-                    "/api/video-gen/grok-stream" if model == "grok-video" else "/api/video-gen/veo",
-                    "post"
-                )
+                guard_id = _get_token_manager().get_guard_id(_path, "post")
                 status_code, history_id, submit_err = _api_submit_video(
                     token, guard_id, ts_token, prompt_text,
                     model, aspect_ratio, resolution, duration,
