@@ -206,7 +206,7 @@ body {
 </head>
 <body>
 
-<div class="card">
+<div class="card" id="mainCard" style="visibility:hidden">
   <div class="logo-wrap">
     <div class="logo-icon">K</div>
     <div class="logo-title">欢迎使用 Kewen AI</div>
@@ -336,15 +336,17 @@ async function doRegister() {
   }
 }
 
-// 已登录直接跳 dashboard
+// 已登录直接跳 dashboard；未登录才显示登录卡片
 (async () => {
   const token = localStorage.getItem('gg_token');
-  if (!token) return;
-  try {
-    const res = await fetch('/auth/me', { headers: { Authorization: 'Bearer ' + token } });
-    if (res.ok) { window.location.replace('/dashboard'); }
-    else { localStorage.removeItem('gg_token'); }
-  } catch (_) {}
+  if (token) {
+    try {
+      const res = await fetch('/auth/me', { headers: { Authorization: 'Bearer ' + token } });
+      if (res.ok) { window.location.replace('/dashboard'); return; }
+      localStorage.removeItem('gg_token');
+    } catch (_) {}
+  }
+  document.getElementById('mainCard').style.visibility = 'visible';
 })();
 
 // Enter 键提交
