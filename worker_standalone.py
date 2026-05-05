@@ -148,12 +148,13 @@ def claim_pending_task():
         conn.close()
 
 
-def finish_task(task_id, result_url):
+def finish_task(task_id, result_url, is_video=False):
+    url_col = "result_video_url" if is_video else "result_image_url"
     conn = _get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE gen_tasks SET status = 'success', result_image_url = %s, "
+                f"UPDATE gen_tasks SET status = 'success', {url_col} = %s, "
                 "updated_at = NOW() WHERE task_id = %s",
                 (result_url, task_id),
             )
@@ -269,7 +270,79 @@ def cleanup(*paths):
 # ============================================================
 # 核心：处理单个任务
 # ============================================================
+VIDEO_MODELS = {"grok-video", "veo-3-fast"}
+
+
 def process_task(task, worker_id):
+    task_id   = task["task_id"]
+    model     = task["model"]
+    task_type = task.get("task_type") or "image"
+
+    logger.info(f"[W{worker_id}] 任务开始  task_id={task_id}  model={model}  type={task_type}")
+
+    if task_type == "video" or model in VIDEO_MODELS:
+        _process_video(task, worker_id)
+    else:
+        _process_image(task, worker_id)
+
+
+def _process_video(task, worker_id):
+    task_id      = task["task_id"]
+    model        = task["model"]
+    prompt       = task.get("prompt_text") or ""
+    aspect_ratio = task.get("aspect_ratio") or "16:9"
+    resolution   = task.get("resolution") or "1080p"
+    duration     = task.get("video_duration") or 8
+    mode_image   = task.get("video_mode_image") or "ingredient"
+    ref_url      = task.get("product_image_url") or ""
+
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    ref_local   = os.path.join(TEMP_DIR, f"ref_{task_id}.jpg") if ref_url else None
+    video_local = os.path.join(TEMP_DIR, f"vid_{task_id}.mp4")
+    temp_files  = [f for f in [ref_local, video_local] if f]
+
+    try:
+        if ref_url and ref_local:
+            if not download_image(ref_url, ref_local):
+                ref_local = None
+
+        logger.info(f"  [W{worker_id}] 调用视频生成  model={model}  duration={duration}s")
+        success, video_url, error_type = gemini_gen.run_video_task(
+            save_path=video_local,
+            prompt_text=prompt,
+            model=model,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+            duration=duration,
+            mode_image=mode_image,
+            ref_image_path=ref_local,
+        )
+
+        if not success:
+            fail_task(task_id, error_type or "视频生成失败")
+            return
+
+        cos_key    = f"platform_results/video/{task_id}.mp4"
+        result_url = upload_to_cos(video_local, cos_key)
+        if not result_url:
+            result_url = video_url
+
+        if not result_url:
+            fail_task(task_id, "视频上传失败")
+            return
+
+        finish_task(task_id, result_url, is_video=True)
+        logger.info(f"  [W{worker_id}] 视频任务完成: {result_url[:60]}")
+
+    except Exception as e:
+        logger.error(f"  [W{worker_id}] 视频任务异常 {task_id}: {e}")
+        traceback.print_exc()
+        fail_task(task_id, str(e)[:400])
+    finally:
+        cleanup(*temp_files)
+
+
+def _process_image(task, worker_id):
     task_id      = task["task_id"]
     model        = task["model"]
     prompt       = task.get("prompt_text") or ""
@@ -278,13 +351,10 @@ def process_task(task, worker_id):
     prod_url     = task.get("product_image_url") or ""
     scene_url    = task.get("scene_image_url") or ""
 
-    logger.info(f"[W{worker_id}] 任务开始  task_id={task_id}  model={model}  ratio={aspect_ratio}  res={resolution}")
-
     os.makedirs(TEMP_DIR, exist_ok=True)
     generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.png")
     temp_files = [generated_local]
 
-    # ── 下载参考图（product 优先，scene 次之，最多 5 张）─────────
     reference_images = []
     for idx, url in enumerate([u for u in [prod_url, scene_url] if u]):
         local_path = os.path.join(TEMP_DIR, f"ref_{task_id}_{idx}.jpg")
@@ -295,13 +365,11 @@ def process_task(task, worker_id):
             logger.warning(f"  [W{worker_id}] 参考图下载失败（跳过）: {url[:80]}")
 
     try:
-        # 生成（最多 3 次）
         final_url   = None
         MAX_RETRIES = 3
 
         for attempt in range(1, MAX_RETRIES + 1):
             logger.info(f"  [W{worker_id}] 生成第 {attempt}/{MAX_RETRIES} 次...  参考图={len(reference_images)}张")
-
             success, thumb_url, error_type = gemini_gen.run_task(
                 save_path=generated_local,
                 prompt_text=prompt,
@@ -310,13 +378,11 @@ def process_task(task, worker_id):
                 resolution=resolution,
                 reference_images=reference_images if reference_images else None,
             )
-
             if not success:
                 logger.warning(f"  [W{worker_id}] 第{attempt}次生成失败  error={error_type}")
                 if attempt < MAX_RETRIES:
                     time.sleep(20)
                 continue
-
             final_url = thumb_url
             break
 
@@ -325,18 +391,16 @@ def process_task(task, worker_id):
             cleanup(*temp_files)
             return
 
-        # 上传结果（失败则用直链兜底）
         cos_key    = f"platform_results/{task_id}.png"
         result_url = upload_to_cos(generated_local, cos_key)
         if not result_url:
             result_url = final_url
 
-        # 回写成功
         finish_task(task_id, result_url)
-        logger.info(f"  [W{worker_id}] 任务完成: {result_url[:60]}")
+        logger.info(f"  [W{worker_id}] 图片任务完成: {result_url[:60]}")
 
     except Exception as e:
-        logger.error(f"  [W{worker_id}] 任务异常 {task_id}: {e}")
+        logger.error(f"  [W{worker_id}] 图片任务异常 {task_id}: {e}")
         traceback.print_exc()
         fail_task(task_id, str(e)[:400])
     finally:
