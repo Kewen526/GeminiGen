@@ -282,7 +282,7 @@ body {
 
   <!-- Header -->
   <header class="app-header">
-    <a href="/dashboard" class="header-logo">
+    <a href="javascript:void(0)" class="header-logo" onclick="showSection('overview')" style="cursor:pointer">
       <div class="header-logo-icon">K</div>
       <span class="header-logo-name">Kewen AI</span>
     </a>
@@ -491,6 +491,9 @@ const API = '';
 let token = localStorage.getItem('gg_token');
 let currentUser = null;
 const SECTIONS = ['overview', 'tasks', 'api', 'transactions'];
+
+// Redirect immediately if no token — no blank-page flash
+if (!token) { window.location.replace('/generate'); }
 
 // ── Init ─────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', async () => {
