@@ -73,7 +73,7 @@ class ApiKeyResponse(BaseModel):
     created_at: str
 
 
-# ── 生成任务 ──────────────────────────────────────────────────
+# ── 图片生成任务 ───────────────────────────────────────────────
 class GenerateRequest(BaseModel):
     product_image_url: Optional[str] = None   # 参考图可选
     model: str = "nano-banana-2"
@@ -116,13 +116,50 @@ class GenerateRequest(BaseModel):
         return (v or "PNG").upper()
 
 
+# ── 视频生成任务 ───────────────────────────────────────────────
+class VideoGenerateRequest(BaseModel):
+    model: str = "veo-3-fast"
+    prompt: str
+    aspect_ratio: Optional[str] = "16:9"
+    resolution: Optional[str] = "1080p"
+    duration: Optional[int] = 8        # 秒，Veo 支持 5/8，Grok 支持 5/10
+    enhance_prompt: Optional[bool] = True
+    mode_image: Optional[str] = "ingredient"  # ingredient | reference（Veo 有图时用）
+    ref_image_url: Optional[str] = None       # 参考图 URL（可选）
+
+    @field_validator("model")
+    @classmethod
+    def valid_model(cls, v):
+        allowed = {"grok-video", "veo-3-fast"}
+        if v not in allowed:
+            raise ValueError(f"model 只支持: {', '.join(allowed)}")
+        return v
+
+    @field_validator("aspect_ratio")
+    @classmethod
+    def valid_aspect_ratio(cls, v):
+        allowed = {"16:9", "9:16", "1:1", "landscape", "portrait", "square"}
+        if v and v not in allowed:
+            raise ValueError(f"aspect_ratio 只支持: {', '.join(allowed)}")
+        return v or "16:9"
+
+    @field_validator("duration")
+    @classmethod
+    def valid_duration(cls, v):
+        if v is not None and v not in {5, 6, 8, 10}:
+            raise ValueError("duration 只支持 5/6/8/10 秒")
+        return v
+
+
 class TaskResponse(BaseModel):
     task_id: str
     status: str           # pending | processing | success | failed
     model: str
+    task_type: str = "image"
     cost: Optional[float]
     points_cost: Optional[int] = None
-    result_image_url: Optional[str]
+    result_image_url: Optional[str] = None
+    result_video_url: Optional[str] = None
     error_msg: Optional[str]
     created_at: str
     updated_at: str

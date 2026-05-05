@@ -26,12 +26,18 @@ DB_CONFIG = {
     "connect_timeout": 10,
 }
 
-# ── 定价（人民币 / 张）────────────────────────────────────────
+# ── 定价（人民币 / 次）────────────────────────────────────────
 MODEL_PRICES: dict[str, float] = {
     "nano-banana-2":   0.05,
     "nano-banana-pro": 0.06,
+    # 视频生成
+    "grok-video":      1.00,
+    "veo-3-fast":      2.00,
 }
 DEFAULT_MODEL = "nano-banana-2"
+
+IMAGE_MODELS = {"nano-banana-2", "nano-banana-pro"}
+VIDEO_MODELS  = {"grok-video", "veo-3-fast"}
 
 # ── GeminiGen 账号（仅服务器内置 Worker 使用，本地 Worker 不用）
 GEMINIGEN_USERNAME = os.getenv("GEMINIGEN_USERNAME", "")

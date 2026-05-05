@@ -1628,22 +1628,328 @@ def _api_poll_and_download(task_uuid, save_path):
 
 
 def _download_image(url, save_path):
+    return _download_file(url, save_path)
+
+
+# ============================================================
+# 视频生成 HTTP 提交
+# ============================================================
+VIDEO_POLL_INTERVAL = 10
+VIDEO_GENERATE_TIMEOUT = 900  # 15 分钟
+
+def _api_submit_video(token, guard_id, turnstile_token, prompt_text,
+                      model, aspect_ratio, resolution, duration,
+                      enhance_prompt, mode_image, ref_image_path=None):
+    """
+    提交视频生成任务。
+    Grok: POST /api/video-gen/grok-stream
+    Veo:  POST /api/video-gen/veo
+    返回 (status_code, history_id, error_str)
+    """
+    if model == "grok-video":
+        url  = f"{API_BASE}/video-gen/grok-stream"
+        path = "/api/video-gen/grok-stream"
+        # Grok aspect_ratio 用 landscape/portrait/square
+        _ar_map = {"16:9": "landscape", "9:16": "portrait", "1:1": "square"}
+        grok_ar = _ar_map.get(aspect_ratio, aspect_ratio)
+        data = {
+            "prompt":          prompt_text,
+            "model":           "grok-video",
+            "aspect_ratio":    grok_ar,
+            "resolution":      resolution or "480p",
+            "duration":        str(duration or 6),
+            "mode":            "custom",
+            "turnstile_token": turnstile_token,
+        }
+        files = None
+    else:
+        url  = f"{API_BASE}/video-gen/veo"
+        path = "/api/video-gen/veo"
+        data = {
+            "prompt":          prompt_text,
+            "model":           "veo-3-fast",
+            "aspect_ratio":    aspect_ratio or "16:9",
+            "turnstile_token": turnstile_token,
+            "enhance_prompt":  "true" if enhance_prompt else "false",
+            "duration":        str(duration or 8),
+            "resolution":      resolution or "1080p",
+            "mode_image":      mode_image or "ingredient",
+        }
+        files = None
+        if ref_image_path and os.path.exists(ref_image_path):
+            try:
+                ext  = os.path.splitext(ref_image_path)[1].lower()
+                mime = "image/png" if ext == ".png" else "image/webp" if ext == ".webp" else "image/jpeg"
+                files = [("ref_images", (os.path.basename(ref_image_path),
+                                         open(ref_image_path, "rb"), mime))]
+            except Exception as e:
+                logger.warning(f"  [Video] 打开参考图失败: {e}")
+        if not files:
+            data["ref_images"] = ""
+
+    if guard_id:
+        guard_id = _get_token_manager().get_guard_id(path, "post")
+
+    headers = _build_headers(token, guard_id)
+
+    open_handles = [f[1][1] for f in (files or []) if hasattr(f[1][1], "read")]
+    try:
+        for attempt in range(1, NET_RETRY_COUNT + 1):
+            try:
+                resp = req_lib.post(
+                    url, headers=headers,
+                    data=data, files=files or None,
+                    timeout=120,
+                    proxies={"http": None, "https": None},
+                )
+                break
+            except (ReqConnectionError, Timeout, ConnectionError, OSError) as e:
+                if attempt < NET_RETRY_COUNT:
+                    logger.warning(f"  [Video] 网络错误(第{attempt}次): {e}, 重试...")
+                    time.sleep(NET_RETRY_DELAY)
+                else:
+                    raise
+    finally:
+        for fh in open_handles:
+            try: fh.close()
+            except Exception: pass
+
+    logger.info(f"  [Video] 提交响应 HTTP {resp.status_code}")
+    if resp.status_code == 200:
+        try:
+            body = resp.json()
+            history_id = (body.get("history_id") or body.get("id")
+                          or body.get("uuid") or body.get("task_id"))
+            if not history_id:
+                uuids = re.findall(
+                    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                    resp.text,
+                )
+                history_id = uuids[0] if uuids else None
+            logger.info(f"  [Video] history_id={history_id}")
+            return (200, history_id, "")
+        except Exception as e:
+            logger.error(f"  [Video] 解析响应失败: {e}  body={resp.text[:200]}")
+            return (200, None, "parse_error")
+    elif resp.status_code == 429:
+        _trigger_rate_limit()
+        return (429, None, "RATE_LIMIT")
+    elif resp.status_code in (401, 403):
+        return (resp.status_code, None, "TOKEN_EXPIRED")
+    elif resp.status_code == 400:
+        try:
+            detail = resp.json().get("detail", {})
+            ec = (detail.get("error_code") if isinstance(detail, dict) else "") or ""
+            if ec == "TURNSTILE_INVALID":
+                return (400, None, "TURNSTILE_INVALID")
+        except Exception:
+            pass
+        logger.error(f"  [Video] HTTP 400: {resp.text[:200]}")
+        return (400, None, "")
+    else:
+        logger.error(f"  [Video] HTTP {resp.status_code}: {resp.text[:200]}")
+        return (resp.status_code, None, "")
+
+
+def _api_poll_video(history_id, save_path):
+    """
+    轮询 GET /api/history/{id} 直到完成，下载 .mp4 到 save_path。
+    返回 (success, video_url, error_str)
+    """
+    start = time.time()
+    consecutive_errors = 0
+
+    while time.time() - start < VIDEO_GENERATE_TIMEOUT:
+        elapsed = int(time.time() - start)
+        token, _ = _get_fresh_token()
+        if not token:
+            logger.warning(f"  [Video] 无法获取 token，等待15s...")
+            time.sleep(15)
+            consecutive_errors += 1
+            if consecutive_errors >= 5:
+                return (False, None, "no_token")
+            continue
+
+        consecutive_errors = 0
+        try:
+            guard_id = _get_token_manager().get_guard_id(f"/api/history/{history_id}", "get")
+            headers  = _build_headers(token, guard_id)
+            resp = _safe_get(
+                f"{API_BASE}/history/{history_id}",
+                headers=headers, timeout=30
+            )
+
+            if resp.status_code == 200:
+                data   = resp.json()
+                status = data.get("status")
+                logger.info(f"  [Video] [{elapsed}s] status={status}")
+
+                if status == "success" or status == 2:
+                    video_url = (data.get("result_video_url") or data.get("video_url")
+                                 or data.get("output_url") or data.get("url"))
+                    if not video_url:
+                        # 尝试从 result 字段中提取
+                        result = data.get("result") or {}
+                        if isinstance(result, dict):
+                            video_url = result.get("url") or result.get("video_url")
+                    if video_url:
+                        logger.info(f"  [Video] 生成完成，下载 {video_url[:80]}...")
+                        ok = _download_file(video_url, save_path)
+                        return (ok, video_url, "")
+                    else:
+                        logger.error(f"  [Video] 状态成功但无 video_url: {data}")
+                        return (False, None, "no_video_url")
+
+                elif status == "failed" or status == 3:
+                    err = data.get("error_msg") or data.get("error_message") or "未知错误"
+                    logger.error(f"  [Video] 任务失败: {err}")
+                    return (False, None, str(err)[:200])
+
+            elif resp.status_code in (401, 403):
+                logger.warning(f"  [Video] [{elapsed}s] HTTP {resp.status_code}，刷新 token...")
+                _get_fresh_token(force_refresh=True, stale_token=token)
+                time.sleep(15)
+            elif resp.status_code in (500, 502, 503):
+                logger.warning(f"  [Video] [{elapsed}s] 服务器错误 {resp.status_code}")
+            else:
+                logger.warning(f"  [Video] [{elapsed}s] HTTP {resp.status_code}")
+
+        except Exception as e:
+            consecutive_errors += 1
+            logger.warning(f"  [Video] [{elapsed}s] 轮询异常({consecutive_errors}次): {e}")
+            if consecutive_errors >= 3:
+                _invalidate_token_cache(bad_token=token)
+                time.sleep(30)
+                consecutive_errors = 0
+
+        time.sleep(VIDEO_POLL_INTERVAL)
+
+    logger.error(f"  [Video] 超时 ({VIDEO_GENERATE_TIMEOUT}s)")
+    return (False, None, "timeout")
+
+
+def _download_file(url, save_path):
+    """下载任意文件（图片或视频）到本地路径"""
     logger.info(f"  下载: {url[:80]}...")
     try:
         headers = {
             "Referer":    "https://geminigen.ai/",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/147 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/147 Safari/537.36",
         }
-        resp = _safe_get(url, headers=headers, timeout=60)
+        resp = _safe_get(url, headers=headers, timeout=120)
         resp.raise_for_status()
         with open(save_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192): f.write(chunk)
+            for chunk in resp.iter_content(chunk_size=65536):
+                f.write(chunk)
         size_mb = os.path.getsize(save_path) / 1024 / 1024
         logger.info(f"  已保存: {save_path} ({size_mb:.1f}MB)")
         return True
     except Exception as e:
         logger.error(f"  下载失败: {e}")
         return False
+
+
+def run_video_task(save_path, prompt_text, model="veo-3-fast",
+                   aspect_ratio="16:9", resolution="1080p",
+                   duration=8, enhance_prompt=True,
+                   mode_image="ingredient", ref_image_path=None):
+    """
+    提交视频生成任务并等待结果。
+    save_path:      本地保存 .mp4 的路径
+    prompt_text:    文字描述
+    model:          grok-video | veo-3-fast
+    aspect_ratio:   16:9 / 9:16 / 1:1 / landscape / portrait / square
+    resolution:     480p / 720p / 1080p
+    duration:       视频时长（秒）
+    enhance_prompt: 是否开启 prompt 增强（Veo）
+    mode_image:     ingredient / reference（Veo 有图时）
+    ref_image_path: 本地参考图路径（可选，Veo 支持）
+    返回: (success: bool, video_url: str|None, error_type: str)
+    """
+    MAX_SUBMIT_RETRY = 6
+
+    try:
+        history_id = None
+        for attempt in range(1, MAX_SUBMIT_RETRY + 1):
+            jitter = random.uniform(SUBMIT_JITTER_MIN, SUBMIT_JITTER_MAX)
+            logger.info(f"  [Video] 提交前等待 {jitter:.1f}s...")
+            time.sleep(jitter)
+
+            _wait_for_rate_limit()
+
+            token, _ = _get_fresh_token()
+            if not token:
+                logger.error("  [Video] Token 获取失败，等10s重试...")
+                time.sleep(10)
+                continue
+
+            try:
+                ts_token = _get_turnstile_token()
+            except Exception as e:
+                logger.error(f"  [Video] Turnstile 失败: {e}")
+                return (False, None, "turnstile_capsolver_failed")
+
+            guard_id = _get_token_manager().get_guard_id(
+                "/api/video-gen/grok-stream" if model == "grok-video" else "/api/video-gen/veo",
+                "post"
+            )
+
+            logger.info(f"  [Video] 提交  model={model}  attempt={attempt}/{MAX_SUBMIT_RETRY}")
+            status_code, history_id, submit_err = _api_submit_video(
+                token, guard_id, ts_token, prompt_text,
+                model, aspect_ratio, resolution, duration,
+                enhance_prompt, mode_image, ref_image_path,
+            )
+
+            if history_id:
+                _turnstile_on_success()
+                break
+
+            if submit_err == "TURNSTILE_INVALID":
+                _turnstile_on_skip_fail()
+                logger.info("  [Video] skip 被拒，用 CapSolver 重试...")
+                try:
+                    ts_token = _solve_turnstile()
+                except Exception as e:
+                    logger.error(f"  [Video] CapSolver 失败: {e}")
+                    return (False, None, "turnstile_capsolver_failed")
+                guard_id = _get_token_manager().get_guard_id(
+                    "/api/video-gen/grok-stream" if model == "grok-video" else "/api/video-gen/veo",
+                    "post"
+                )
+                status_code, history_id, submit_err = _api_submit_video(
+                    token, guard_id, ts_token, prompt_text,
+                    model, aspect_ratio, resolution, duration,
+                    enhance_prompt, mode_image, ref_image_path,
+                )
+                if history_id:
+                    _turnstile_on_success()
+                    break
+
+            if submit_err == "RATE_LIMIT":
+                _wait_for_rate_limit()
+                continue
+            if status_code in (401, 403):
+                _get_fresh_token(force_refresh=True, stale_token=token)
+                time.sleep(15)
+                continue
+
+            logger.warning(f"  [Video] 提交失败 HTTP {status_code} err={submit_err}，等10s重试...")
+            time.sleep(10)
+
+        if not history_id:
+            logger.error(f"  [Video] 提交重试 {MAX_SUBMIT_RETRY} 次后仍失败")
+            return (False, None, "submit_failed")
+
+        logger.info(f"  [Video] 已提交，history_id={history_id}，开始轮询...")
+        return _api_poll_video(history_id, save_path)
+
+    except Exception as e:
+        logger.error(f"  [Video] 任务异常: {e}")
+        traceback.print_exc()
+        if _is_network_error(e):
+            _invalidate_token_cache()
+        return (False, None, str(e)[:200])
 
 
 # ============================================================

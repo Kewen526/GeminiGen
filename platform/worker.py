@@ -26,7 +26,7 @@ from cos_upload import upload_to_cos
 from .config import (
     WORKER_COUNT, WORKER_POLL_S, SCENE_ROOT, TEMP_DIR,
     GEMINIGEN_USERNAME, GEMINIGEN_PASSWORD,
-    MODEL_PRICES,
+    MODEL_PRICES, VIDEO_MODELS,
 )
 from . import database as db
 
@@ -78,11 +78,85 @@ def _download_image(url_or_path: str, save_path: str) -> bool:
 def _process_task(task: dict, worker_id: int) -> None:
     task_id   = task["task_id"]
     model     = task["model"]
+    task_type = task.get("task_type") or "image"
+
+    logger.info(f"[W{worker_id}] 开始处理任务 {task_id} model={model} type={task_type}")
+
+    if task_type == "video" or model in VIDEO_MODELS:
+        _process_video_task(task, worker_id)
+        return
+
+    _process_image_task(task, worker_id)
+
+
+def _process_video_task(task: dict, worker_id: int) -> None:
+    task_id      = task["task_id"]
+    model        = task["model"]
+    prompt       = task.get("prompt_text") or ""
+    aspect_ratio = task.get("aspect_ratio") or "16:9"
+    resolution   = task.get("resolution") or "1080p"
+    duration     = task.get("video_duration") or 8
+    mode_image   = task.get("video_mode_image") or "ingredient"
+    ref_url      = task.get("product_image_url") or ""
+
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    ref_local   = os.path.join(TEMP_DIR, f"ref_{task_id}.jpg") if ref_url else None
+    video_local = os.path.join(TEMP_DIR, f"vid_{task_id}.mp4")
+
+    try:
+        # 下载参考图（如有）
+        if ref_url:
+            if not _download_image(ref_url, ref_local):
+                ref_local = None
+
+        logger.info(f"[W{worker_id}] 调用视频生成接口  model={model}  duration={duration}s")
+        success, video_url, error_type = gemini_gen.run_video_task(
+            save_path=video_local,
+            prompt_text=prompt,
+            model=model,
+            aspect_ratio=aspect_ratio,
+            resolution=resolution,
+            duration=duration,
+            mode_image=mode_image,
+            ref_image_path=ref_local,
+        )
+
+        if not success:
+            db.fail_task(task_id, error_type or "视频生成失败", refund=True)
+            return
+
+        # 上传结果到 COS
+        cos_key    = f"platform_results/video/{task_id}.mp4"
+        result_url = upload_to_cos(video_local, cos_key)
+        if not result_url:
+            result_url = video_url  # 回退用原始 CDN 链接
+
+        if not result_url:
+            db.fail_task(task_id, "视频上传失败", refund=True)
+            return
+
+        db.finish_task(task_id, result_url, is_video=True)
+        logger.info(f"[W{worker_id}] 视频任务完成 {task_id} -> {result_url[:60]}")
+
+    except Exception as e:
+        logger.error(f"[W{worker_id}] 视频任务异常 {task_id}: {e}")
+        import traceback; traceback.print_exc()
+        db.fail_task(task_id, str(e)[:400], refund=True)
+    finally:
+        for p in [ref_local, video_local]:
+            try:
+                if p and os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
+
+
+def _process_image_task(task: dict, worker_id: int) -> None:
+    task_id   = task["task_id"]
+    model     = task["model"]
     prod_url  = task["product_image_url"]
     scene_url = task.get("scene_image_url") or ""
     prompt    = task.get("prompt_text") or ""
-
-    logger.info(f"[W{worker_id}] 开始处理任务 {task_id} model={model}")
 
     os.makedirs(TEMP_DIR, exist_ok=True)
     product_local   = os.path.join(TEMP_DIR, f"prod_{task_id}.jpg")

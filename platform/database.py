@@ -250,7 +250,8 @@ def get_user_tasks_recent(user_id: int, days: int = 7, limit: int = 50) -> list:
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT task_id, model, status, cost, result_image_url, "
+                "SELECT task_id, model, task_type, status, cost, "
+                "       result_image_url, result_video_url, "
                 "       error_msg, created_at, updated_at, prompt_text, "
                 "       TIMESTAMPDIFF(SECOND, created_at, updated_at) AS duration_seconds "
                 "FROM gen_tasks WHERE user_id = %s "
@@ -344,20 +345,24 @@ def create_task(user_id: int, model: str, product_image_url: str,
                 scene_image_url: str, prompt_text: str,
                 cost: float, api_key_id: Optional[int] = None,
                 aspect_ratio: str = "1:1", resolution: str = "1K",
-                output_format: str = "PNG") -> str:
+                output_format: str = "PNG",
+                task_type: str = "image",
+                video_duration: Optional[int] = None,
+                video_mode_image: Optional[str] = None) -> str:
     task_id = str(uuid.uuid4())
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO gen_tasks "
-                "(task_id, user_id, api_key_id, model, product_image_url, "
+                "(task_id, user_id, api_key_id, model, task_type, product_image_url, "
                 " scene_image_url, prompt_text, cost, status, "
-                " aspect_ratio, resolution, output_format) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s)",
-                (task_id, user_id, api_key_id, model,
+                " aspect_ratio, resolution, output_format, video_duration, video_mode_image) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)",
+                (task_id, user_id, api_key_id, model, task_type,
                  product_image_url, scene_image_url, prompt_text, cost,
-                 aspect_ratio, resolution, output_format),
+                 aspect_ratio, resolution, output_format,
+                 video_duration, video_mode_image),
             )
         conn.commit()
         return task_id
@@ -420,16 +425,16 @@ def claim_pending_task() -> Optional[dict]:
         conn.close()
 
 
-def finish_task(task_id: str, result_url: str) -> None:
+def finish_task(task_id: str, result_url: str, is_video: bool = False) -> None:
     conn = get_conn()
+    url_col = "result_video_url" if is_video else "result_image_url"
     try:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE gen_tasks SET status = 'success', result_image_url = %s, "
+                f"UPDATE gen_tasks SET status = 'success', {url_col} = %s, "
                 "updated_at = NOW() WHERE task_id = %s",
                 (result_url, task_id),
             )
-            # 同步更新 total_tasks 计数
             cur.execute(
                 "UPDATE platform_users pu "
                 "JOIN gen_tasks gt ON pu.id = gt.user_id "
