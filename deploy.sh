@@ -84,10 +84,10 @@ else
 # GeminiGen API Server 配置（自动生成）
 SECRET_KEY=${SECRET_KEY}
 
-DB_HOST=47.95.157.46
+DB_HOST=127.0.0.1
 DB_PORT=3306
 DB_USER=root
-DB_PASSWORD=root@kunkun
+DB_PASSWORD=
 DB_NAME=geminigen_platform
 
 HOST=0.0.0.0
@@ -116,9 +116,9 @@ with open(sql_file, "r", encoding="utf-8") as f:
 content = re.sub(r'^\s*USE\s+\S+\s*;\s*$', '', content, flags=re.MULTILINE | re.IGNORECASE)
 
 conn = pymysql.connect(
-    host="47.95.157.46", port=3306,
-    user="root", password="root@kunkun",
-    database="geminigen_platform", charset="utf8mb4",
+    host=os.getenv("DB_HOST", "127.0.0.1"), port=int(os.getenv("DB_PORT", "3306")),
+    user=os.getenv("DB_USER", "root"), password=os.getenv("DB_PASSWORD", ""),
+    database=os.getenv("DB_NAME", "geminigen_platform"), charset="utf8mb4",
     connect_timeout=10,
 )
 try:

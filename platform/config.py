@@ -17,10 +17,10 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 天
 
 # ── 数据库 ────────────────────────────────────────────────────
 DB_CONFIG = {
-    "host":            os.getenv("DB_HOST", "47.95.157.46"),
+    "host":            os.getenv("DB_HOST", "127.0.0.1"),
     "port":            int(os.getenv("DB_PORT", "3306")),
     "user":            os.getenv("DB_USER", "root"),
-    "password":        os.getenv("DB_PASSWORD", "root@kunkun"),
+    "password":        os.getenv("DB_PASSWORD", ""),
     "database":        os.getenv("DB_NAME", "geminigen_platform"),
     "charset":         "utf8mb4",
     "connect_timeout": 10,
