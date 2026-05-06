@@ -342,21 +342,41 @@ def _process_video(task, worker_id):
         cleanup(*temp_files)
 
 
+def _parse_image_urls(raw: str) -> list:
+    """解析 product_image_url：单个 URL 或 JSON 数组"""
+    if not raw:
+        return []
+    if raw.startswith("["):
+        try:
+            return [u for u in json.loads(raw) if u]
+        except Exception:
+            pass
+    return [raw]
+
+
 def _process_image(task, worker_id):
     task_id      = task["task_id"]
     model        = task["model"]
     prompt       = task.get("prompt_text") or ""
     aspect_ratio = task.get("aspect_ratio") or "1:1"
     resolution   = task.get("resolution") or "1K"
-    prod_url     = task.get("product_image_url") or ""
+    prod_raw     = task.get("product_image_url") or ""
     scene_url    = task.get("scene_image_url") or ""
 
     os.makedirs(TEMP_DIR, exist_ok=True)
     generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.png")
     temp_files = [generated_local]
 
+    # 解析用户上传的参考图（支持多图 JSON 数组）
+    prod_urls = _parse_image_urls(prod_raw)
+    # 用户只上传1张图时，追加场景图；上传2张及以上时直接使用用户图
+    if len(prod_urls) <= 1 and scene_url:
+        all_urls = prod_urls + [scene_url]
+    else:
+        all_urls = prod_urls
+
     reference_images = []
-    for idx, url in enumerate([u for u in [prod_url, scene_url] if u]):
+    for idx, url in enumerate(all_urls[:5]):
         local_path = os.path.join(TEMP_DIR, f"ref_{task_id}_{idx}.jpg")
         if download_image(url, local_path):
             reference_images.append(local_path)
