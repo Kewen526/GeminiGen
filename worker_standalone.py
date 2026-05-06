@@ -50,10 +50,10 @@ _parser.add_argument("--worker-count",  type=int, default=0)
 _args, _ = _parser.parse_known_args()
 
 # ── 数据库配置 ─────────────────────────────────────────────────
-DB_HOST     = os.environ.get("DB_HOST",     "47.95.157.46")
+DB_HOST     = os.environ.get("DB_HOST",     "43.155.157.57")
 DB_PORT     = int(os.environ.get("DB_PORT", "3306"))
 DB_USER     = os.environ.get("DB_USER",     "root")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "root@kunkun")
+DB_PASSWORD = os.environ.get("DB_PASSWORD", "Kewen888@")
 DB_NAME     = os.environ.get("DB_NAME",     "geminigen_platform")
 
 # ── GeminiGen 账号（命令行 > 环境变量）────────────────────────
