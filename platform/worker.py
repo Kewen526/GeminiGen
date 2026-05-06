@@ -8,6 +8,7 @@
 
 import os
 import sys
+import json
 import time
 import random
 import logging
@@ -54,6 +55,19 @@ def _get_random_scene_photo() -> str:
     if not all_imgs:
         raise FileNotFoundError(f"场景图目录为空或不存在: {SCENE_ROOT}")
     return random.choice(all_imgs)
+
+
+def _parse_image_urls(raw: str) -> list:
+    """解析 product_image_url 字段：可能是单个 URL，也可能是 JSON 数组"""
+    if not raw:
+        return []
+    if raw.startswith("["):
+        try:
+            urls = json.loads(raw)
+            return [u for u in urls if u]
+        except Exception:
+            pass
+    return [raw]
 
 
 def _download_image(url_or_path: str, save_path: str) -> bool:
@@ -154,41 +168,48 @@ def _process_video_task(task: dict, worker_id: int) -> None:
 def _process_image_task(task: dict, worker_id: int) -> None:
     task_id   = task["task_id"]
     model     = task["model"]
-    prod_url  = task["product_image_url"]
+    prod_raw  = task["product_image_url"]
     scene_url = task.get("scene_image_url") or ""
     prompt    = task.get("prompt_text") or ""
 
     os.makedirs(TEMP_DIR, exist_ok=True)
-    product_local   = os.path.join(TEMP_DIR, f"prod_{task_id}.jpg")
     generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.png")
-    scene_local     = None
+    prod_locals: list[str] = []
+    scene_local = None
 
     try:
-        # 1. 下载主体图
-        if not _download_image(prod_url, product_local):
+        # 1. 下载所有用户参考图（支持多图 JSON 数组或单 URL）
+        prod_urls = _parse_image_urls(prod_raw)
+        for i, url in enumerate(prod_urls[:5]):
+            local_path = os.path.join(TEMP_DIR, f"prod_{task_id}_{i}.jpg")
+            if _download_image(url, local_path):
+                prod_locals.append(local_path)
+
+        if not prod_locals:
             db.fail_task(task_id, "图片下载失败", refund=True)
             return
 
-        # 2. 确定场景图
-        if scene_url:
-            scene_local = os.path.join(TEMP_DIR, f"scene_{task_id}.jpg")
-            if not _download_image(scene_url, scene_local):
-                scene_local = None
-        else:
-            scene_local = None
-
-        if not scene_local:
-            try:
-                scene_local = _get_random_scene_photo()
-            except Exception as e:
-                db.fail_task(task_id, f"场景图获取失败: {e}", refund=True)
-                return
+        # 2. 确定场景图：仅当用户只上传了1张图时补充场景图
+        if len(prod_locals) == 1:
+            if scene_url:
+                scene_local = os.path.join(TEMP_DIR, f"scene_{task_id}.jpg")
+                if not _download_image(scene_url, scene_local):
+                    scene_local = None
+            if not scene_local:
+                try:
+                    scene_local = _get_random_scene_photo()
+                except Exception as e:
+                    db.fail_task(task_id, f"场景图获取失败: {e}", refund=True)
+                    return
 
         # 3. 提示词
         final_prompt = prompt if prompt else PROMPT_UNIFIED
 
-        # 4. 生成（product 为主体图放首位，scene 为场景图次之）
-        ref_imgs = [p for p in [product_local, scene_local] if p and os.path.exists(p)]
+        # 4. 生成：用户多图时直接使用，单图时追加场景图
+        if scene_local and os.path.exists(scene_local):
+            ref_imgs = prod_locals + [scene_local]
+        else:
+            ref_imgs = prod_locals
 
         logger.info(f"[W{worker_id}] 调用生成接口...  参考图={len(ref_imgs)}张")
         success, thumb_url, error_type = gemini_gen.run_task(
@@ -225,7 +246,7 @@ def _process_image_task(task: dict, worker_id: int) -> None:
         import traceback; traceback.print_exc()
         db.fail_task(task_id, str(e)[:400], refund=True)
     finally:
-        for p in [product_local, scene_local, generated_local]:
+        for p in prod_locals + ([scene_local] if scene_local else []) + [generated_local]:
             try:
                 if p and os.path.exists(p):
                     os.remove(p)
