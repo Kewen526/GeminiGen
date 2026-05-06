@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 import os
+import json
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Request
 
@@ -74,10 +75,17 @@ def generate(req: GenerateRequest, request: Request, current_user: dict = Depend
     if current_user["balance"] < cost:
         raise HTTPException(status_code=402, detail=f"积分不足，当前余额 {int(current_user['balance'] * POINTS_PER_YUAN)} 积分，需要 {int(cost * POINTS_PER_YUAN)} 积分")
 
+    # 多图：product_image_urls 优先，不存在则降级到 product_image_url
+    if req.product_image_urls:
+        urls = [u for u in req.product_image_urls if u][:5]
+        product_image_url = json.dumps(urls) if len(urls) > 1 else (urls[0] if urls else "")
+    else:
+        product_image_url = req.product_image_url or ""
+
     task_id = db.create_task(
         user_id=current_user["id"],
         model=model,
-        product_image_url=req.product_image_url or "",
+        product_image_url=product_image_url,
         scene_image_url=req.scene_image_url or "",
         prompt_text=req.prompt or "",
         cost=cost,
@@ -101,7 +109,7 @@ def generate(req: GenerateRequest, request: Request, current_user: dict = Depend
 async def generate_upload(
     request: Request,
     model: str = Form(DEFAULT_MODEL),
-    product_image: Optional[UploadFile] = File(None),   # 参考图可选
+    product_images: List[UploadFile] = File(default=[]),  # 支持多张参考图（最多5张）
     prompt: Optional[str] = Form(None),
     aspect_ratio: Optional[str] = Form("1:1"),
     resolution: Optional[str] = Form("1K"),
@@ -131,10 +139,19 @@ async def generate_upload(
 
     os.makedirs(TEMP_DIR, exist_ok=True)
 
-    # 参考图可选
-    product_url = ""
-    if product_image and product_image.filename:
-        product_url = await save_upload_to_url(product_image, TEMP_DIR)
+    # 上传多张参考图（最多5张），收集 URL
+    uploaded_urls = []
+    for img in product_images[:5]:
+        if img and img.filename:
+            url = await save_upload_to_url(img, TEMP_DIR)
+            uploaded_urls.append(url)
+
+    if len(uploaded_urls) > 1:
+        product_url = json.dumps(uploaded_urls)
+    elif len(uploaded_urls) == 1:
+        product_url = uploaded_urls[0]
+    else:
+        product_url = ""
 
     task_id = db.create_task(
         user_id=current_user["id"],

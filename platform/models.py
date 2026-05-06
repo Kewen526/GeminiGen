@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from typing import Optional
+from typing import List, Optional
 from pydantic import BaseModel, EmailStr, field_validator, model_validator
 
 
@@ -75,7 +75,8 @@ class ApiKeyResponse(BaseModel):
 
 # ── 图片生成任务 ───────────────────────────────────────────────
 class GenerateRequest(BaseModel):
-    product_image_url: Optional[str] = None   # 参考图可选
+    product_image_url: Optional[str] = None        # 单张参考图 URL（向后兼容）
+    product_image_urls: Optional[List[str]] = None  # 多张参考图 URL 列表（最多5张）
     model: str = "nano-banana-2"
     scene_image_url: Optional[str] = None
     prompt: Optional[str] = None
