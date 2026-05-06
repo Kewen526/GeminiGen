@@ -361,22 +361,14 @@ def _process_image(task, worker_id):
     aspect_ratio = task.get("aspect_ratio") or "1:1"
     resolution   = task.get("resolution") or "1K"
     prod_raw     = task.get("product_image_url") or ""
-    scene_url    = task.get("scene_image_url") or ""
 
     os.makedirs(TEMP_DIR, exist_ok=True)
     generated_local = os.path.join(TEMP_DIR, f"gen_{task_id}.png")
     temp_files = [generated_local]
 
-    # 解析用户上传的参考图（支持多图 JSON 数组）
-    prod_urls = _parse_image_urls(prod_raw)
-    # 用户只上传1张图时，追加场景图；上传2张及以上时直接使用用户图
-    if len(prod_urls) <= 1 and scene_url:
-        all_urls = prod_urls + [scene_url]
-    else:
-        all_urls = prod_urls
-
+    # 解析用户上传的参考图（支持多图 JSON 数组），用户传什么就用什么
     reference_images = []
-    for idx, url in enumerate(all_urls[:5]):
+    for idx, url in enumerate(_parse_image_urls(prod_raw)[:5]):
         local_path = os.path.join(TEMP_DIR, f"ref_{task_id}_{idx}.jpg")
         if download_image(url, local_path):
             reference_images.append(local_path)
