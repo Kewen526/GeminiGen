@@ -19,7 +19,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _BASE)
+if _BASE not in sys.path:
+    sys.path.append(_BASE)
 
 import gemini_gen
 from cos_upload import upload_to_cos
