@@ -31,8 +31,8 @@ MODEL_PRICES: dict[str, float] = {
     "nano-banana-2":   0.05,
     "nano-banana-pro": 0.06,
     # 视频生成
-    "grok-video":      1.00,
-    "veo-3-fast":      2.00,
+    "grok-video":      0.30,
+    "veo-3-fast":      0.50,
 }
 DEFAULT_MODEL = "nano-banana-2"
 
