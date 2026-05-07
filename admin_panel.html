@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>管理后台</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0f0f0f; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 40px; width: 420px; }
+  h2 { font-size: 18px; color: #fff; margin-bottom: 28px; text-align: center; }
+  label { font-size: 13px; color: #888; display: block; margin-bottom: 6px; }
+  input { width: 100%; background: #111; border: 1px solid #333; border-radius: 8px; padding: 10px 14px; color: #fff; font-size: 14px; outline: none; margin-bottom: 16px; }
+  input:focus { border-color: #555; }
+  button { width: 100%; background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 12px; font-size: 14px; cursor: pointer; }
+  button:hover { background: #1d4ed8; }
+  .msg { margin-top: 14px; font-size: 13px; text-align: center; min-height: 20px; }
+  .ok { color: #4ade80; }
+  .err { color: #f87171; }
+  .hidden { display: none; }
+  .row { display: flex; gap: 10px; }
+  .row input { margin-bottom: 0; }
+  .sep { border-top: 1px solid #2a2a2a; margin: 24px 0; }
+  .balance-tag { font-size: 12px; color: #888; text-align: right; margin-bottom: 16px; }
+  .balance-tag span { color: #facc15; font-weight: bold; }
+  table { width: 100%; font-size: 12px; border-collapse: collapse; margin-top: 16px; }
+  th { color: #666; font-weight: normal; padding: 6px 4px; text-align: left; border-bottom: 1px solid #222; }
+  td { padding: 6px 4px; border-bottom: 1px solid #1e1e1e; }
+  .plus { color: #4ade80; }
+  .minus { color: #f87171; }
+</style>
+</head>
+<body>
+
+<!-- 登录面板 -->
+<div class="card" id="loginPanel">
+  <h2>管理后台</h2>
+  <label>账号</label>
+  <input type="text" id="loginUser" placeholder="账号">
+  <label>密码</label>
+  <input type="password" id="loginPass" placeholder="密码">
+  <button onclick="doLogin()">登录</button>
+  <div class="msg" id="loginMsg"></div>
+</div>
+
+<!-- 充值面板 -->
+<div class="card hidden" id="rechargePanel">
+  <h2>余额管理</h2>
+
+  <label>查询用户余额</label>
+  <div class="row" style="margin-bottom:16px">
+    <input type="text" id="queryEmail" placeholder="用户邮箱" style="margin-bottom:0">
+    <button style="width:90px" onclick="queryUser()">查询</button>
+  </div>
+
+  <div id="userInfo" class="hidden">
+    <div class="balance-tag">当前余额：<span id="userBalance">-</span> 元 &nbsp;|&nbsp; 用户ID：<span id="userId">-</span></div>
+
+    <div class="sep"></div>
+    <label>充值金额（元）</label>
+    <input type="number" id="rechargeAmount" placeholder="例如 100" min="0.01" step="0.01">
+    <label>备注（选填）</label>
+    <input type="text" id="rechargeNote" placeholder="充值备注">
+    <button onclick="doRecharge()">确认充值</button>
+    <div class="msg" id="rechargeMsg"></div>
+
+    <div class="sep"></div>
+    <label>最近流水</label>
+    <table>
+      <tr><th>时间</th><th>类型</th><th>金额</th><th>备注</th></tr>
+      <tbody id="txList"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const API = 'https://api.kewenai.shop';
+let TOKEN = '';
+let CURRENT_USER_ID = null;
+
+async function doLogin() {
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value.trim();
+  const msg  = document.getElementById('loginMsg');
+  msg.textContent = '登录中...';
+  msg.className = 'msg';
+  try {
+    const fd = new FormData();
+    fd.append('username', user);
+    fd.append('password', pass);
+    const r = await fetch(`${API}/auth/login`, { method: 'POST', body: fd });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || '登录失败');
+    TOKEN = d.access_token;
+    // 验证是否管理员
+    const me = await fetch(`${API}/auth/me`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    const md = await me.json();
+    if (!md.is_admin) throw new Error('非管理员账号');
+    document.getElementById('loginPanel').classList.add('hidden');
+    document.getElementById('rechargePanel').classList.remove('hidden');
+  } catch(e) {
+    msg.textContent = e.message;
+    msg.className = 'msg err';
+  }
+}
+
+async function queryUser() {
+  const email = document.getElementById('queryEmail').value.trim();
+  if (!email) return;
+  try {
+    const r = await fetch(`${API}/v1/admin/user-by-email?email=${encodeURIComponent(email)}`, {
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || '用户不存在');
+    CURRENT_USER_ID = d.id;
+    document.getElementById('userId').textContent = d.id;
+    document.getElementById('userBalance').textContent = parseFloat(d.balance).toFixed(2);
+    document.getElementById('userInfo').classList.remove('hidden');
+    document.getElementById('rechargeMsg').textContent = '';
+    loadTx(d.id);
+  } catch(e) {
+    alert(e.message);
+  }
+}
+
+async function loadTx(uid) {
+  try {
+    const r = await fetch(`${API}/v1/admin/transactions?user_id=${uid}&limit=10`, {
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+    const list = await r.json();
+    const tbody = document.getElementById('txList');
+    tbody.innerHTML = list.map(t => {
+      const cls = t.amount > 0 ? 'plus' : 'minus';
+      const sign = t.amount > 0 ? '+' : '';
+      const dt = new Date(t.created_at).toLocaleString('zh-CN');
+      return `<tr><td>${dt}</td><td>${t.type}</td><td class="${cls}">${sign}${parseFloat(t.amount).toFixed(2)}</td><td>${t.note||'-'}</td></tr>`;
+    }).join('');
+  } catch(_) {}
+}
+
+async function doRecharge() {
+  const amount = parseFloat(document.getElementById('rechargeAmount').value);
+  const note   = document.getElementById('rechargeNote').value.trim();
+  const msg    = document.getElementById('rechargeMsg');
+  if (!CURRENT_USER_ID || isNaN(amount) || amount <= 0) {
+    msg.textContent = '请先查询用户并填写金额';
+    msg.className = 'msg err';
+    return;
+  }
+  msg.textContent = '处理中...';
+  msg.className = 'msg';
+  try {
+    const r = await fetch(`${API}/v1/admin/recharge`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: CURRENT_USER_ID, amount, note })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || '充值失败');
+    document.getElementById('userBalance').textContent = parseFloat(d.balance_after).toFixed(2);
+    document.getElementById('rechargeAmount').value = '';
+    document.getElementById('rechargeNote').value = '';
+    msg.textContent = `✅ 充值成功，新余额 ${parseFloat(d.balance_after).toFixed(2)} 元`;
+    msg.className = 'msg ok';
+    loadTx(CURRENT_USER_ID);
+  } catch(e) {
+    msg.textContent = e.message;
+    msg.className = 'msg err';
+  }
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    if (!document.getElementById('loginPanel').classList.contains('hidden')) doLogin();
+  }
+});
+</script>
+</body>
+</html>
