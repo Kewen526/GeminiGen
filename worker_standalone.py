@@ -76,6 +76,7 @@ LOG_FILE   = os.path.join(SCRIPT_DIR, f"worker_{_INSTANCE}.log")
 # ============================================================
 
 import time
+import json
 import random
 import logging
 import threading
@@ -240,12 +241,18 @@ def download_image(url_or_path, save_path):
 
     for attempt in range(3):
         try:
-            opener = urllib.request.build_opener()
-            opener.addheaders = [
-                ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
-            ]
-            urllib.request.install_opener(opener)
-            urllib.request.urlretrieve(url_or_path, save_path)
+            resp = requests.get(
+                url_or_path, timeout=30,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Referer": "https://www.360.com/",
+                },
+                stream=True,
+            )
+            resp.raise_for_status()
+            with open(save_path, "wb") as f:
+                for chunk in resp.iter_content(8192):
+                    f.write(chunk)
             size_kb = os.path.getsize(save_path) / 1024
             logger.info(f"  图片已下载 {size_kb:.0f}KB -> {os.path.basename(save_path)}")
             return True
