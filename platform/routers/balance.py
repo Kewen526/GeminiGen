@@ -54,3 +54,44 @@ def admin_recharge(
         tx_type="recharge", note=req.note or "管理员充值"
     )
     return {"user_id": req.user_id, "amount": req.amount, "balance_after": new_bal}
+
+
+# ── 管理员按邮箱查用户 ────────────────────────────────────────
+@router.get("/admin/user-by-email")
+def admin_get_user_by_email(
+    email: str,
+    _admin: dict = Depends(require_admin),
+):
+    user = db.get_user_by_email(email)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "username": user.get("username"),
+        "balance": float(user["balance"]),
+        "total_tasks": user.get("total_tasks", 0),
+    }
+
+
+# ── 管理员查用户流水 ──────────────────────────────────────────
+@router.get("/admin/transactions")
+def admin_get_transactions(
+    user_id: int,
+    limit: int = 10,
+    _admin: dict = Depends(require_admin),
+):
+    def _fmt(dt) -> str:
+        return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+    rows = db.get_transactions(user_id, limit=min(limit, 50))
+    return [
+        {
+            "id": r["id"],
+            "amount": float(r["amount"]),
+            "type": r["type"],
+            "note": r.get("note"),
+            "balance_after": float(r["balance_after"]) if r.get("balance_after") is not None else None,
+            "created_at": _fmt(r["created_at"]),
+        }
+        for r in rows
+    ]

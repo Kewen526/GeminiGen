@@ -10,7 +10,8 @@ from contextlib import asynccontextmanager
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from pathlib import Path
 
 from .routers import auth, generate, balance, apikeys
 from .config import HOST, PORT
@@ -116,6 +117,12 @@ app.include_router(apikeys.router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/manage-x9k3p7nq2m8w", response_class=HTMLResponse, include_in_schema=False)
+def admin_panel():
+    html_path = Path(__file__).resolve().parent.parent / "admin_panel.html"
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
