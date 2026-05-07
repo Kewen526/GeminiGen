@@ -144,9 +144,11 @@
           <input type="text" id="keyName" placeholder="Key 名称（选填）" style="margin-bottom:0">
           <button class="sm" onclick="doCreateKey()">生成 Key</button>
         </div>
-        <div id="newKeyBox" class="hidden">
-          <div class="key-box" id="newKeyValue"></div>
-          <div style="font-size:12px;color:#666;margin-top:6px">请立即复制，关闭后不再显示</div>
+        <div id="keysTableWrap">
+          <table>
+            <thead><tr><th>名称</th><th>Key（点击复制）</th><th>调用次数</th><th>最后使用</th></tr></thead>
+            <tbody id="keysList"></tbody>
+          </table>
         </div>
 
         <div class="sep"></div>
@@ -250,9 +252,42 @@ async function queryUser() {
     document.getElementById('userName').textContent = d.username || '-';
     document.getElementById('userInfo').classList.remove('hidden');
     document.getElementById('rechargeMsg').textContent = '';
-    document.getElementById('newKeyBox').classList.add('hidden');
     loadTx(d.id);
+    loadKeys(d.id);
   } catch(e) { alert(e.message); }
+}
+
+async function loadKeys(uid) {
+  try {
+    const r = await fetch(`${API}/v1/admin/api-keys?user_id=${uid}`, {
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+    const list = await r.json();
+    const tbody = document.getElementById('keysList');
+    if (!list.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="color:#555">暂无 Key</td></tr>';
+      return;
+    }
+    tbody.innerHTML = list.map(k => {
+      const last = k.last_used_at ? new Date(k.last_used_at).toLocaleString('zh-CN') : '从未';
+      const short = k.key_value.slice(0,12) + '...' + k.key_value.slice(-6);
+      return `<tr>
+        <td>${k.key_name}</td>
+        <td><span class="key-box" style="cursor:pointer;display:inline-block;padding:3px 8px;font-size:11px"
+          title="点击复制" onclick="copyKey('${k.key_value}', this)">${short}</span></td>
+        <td>${k.total_calls}</td>
+        <td>${last}</td>
+      </tr>`;
+    }).join('');
+  } catch(_) {}
+}
+
+function copyKey(val, el) {
+  navigator.clipboard.writeText(val).then(() => {
+    const old = el.textContent;
+    el.textContent = '✅ 已复制';
+    setTimeout(() => { el.textContent = old; }, 1500);
+  });
 }
 
 async function loadTx(uid) {
@@ -312,9 +347,8 @@ async function doCreateKey() {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || '创建失败');
-    document.getElementById('newKeyValue').textContent = d.key_value;
-    document.getElementById('newKeyBox').classList.remove('hidden');
     document.getElementById('keyName').value = '';
+    loadKeys(CURRENT_USER_ID);
   } catch(e) { alert(e.message); }
 }
 

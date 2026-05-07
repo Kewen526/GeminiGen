@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>API 文档 · Kewen AI</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d0d0d; color: #ccc; font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.6; }
+  a { color: #60a5fa; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .layout { display: flex; min-height: 100vh; }
+
+  /* 侧边栏 */
+  .sidebar { width: 220px; min-width: 220px; background: #111; border-right: 1px solid #1e1e1e; padding: 28px 0; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  .sidebar .logo { padding: 0 20px 24px; font-size: 15px; font-weight: bold; color: #fff; }
+  .sidebar .logo span { color: #60a5fa; }
+  .sidebar ul { list-style: none; }
+  .sidebar li a { display: block; padding: 7px 20px; font-size: 13px; color: #888; transition: color .15s; }
+  .sidebar li a:hover, .sidebar li a.active { color: #fff; text-decoration: none; background: #1a1a1a; }
+  .sidebar .section-title { padding: 14px 20px 4px; font-size: 11px; color: #444; text-transform: uppercase; letter-spacing: .06em; }
+
+  /* 主内容 */
+  .main { flex: 1; max-width: 820px; padding: 48px 56px; }
+  h1 { font-size: 26px; color: #fff; margin-bottom: 10px; }
+  h2 { font-size: 18px; color: #fff; margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid #1e1e1e; }
+  h3 { font-size: 14px; color: #ddd; margin: 20px 0 8px; }
+  p { margin-bottom: 12px; font-size: 14px; color: #999; }
+
+  /* 标签 */
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 8px; }
+  .post { background: #1a3a1a; color: #4ade80; }
+  .get  { background: #1a2e4a; color: #60a5fa; }
+
+  /* 端点 */
+  .endpoint { background: #111; border: 1px solid #1e1e1e; border-radius: 10px; padding: 20px 24px; margin-bottom: 20px; }
+  .endpoint-title { font-size: 15px; color: #fff; display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+  .path { font-family: monospace; font-size: 14px; color: #e2e8f0; }
+  .desc { font-size: 13px; color: #666; margin-bottom: 14px; }
+
+  /* 参数表 */
+  table { width: 100%; font-size: 13px; border-collapse: collapse; margin-bottom: 14px; }
+  th { color: #555; font-weight: normal; padding: 6px 10px; text-align: left; border-bottom: 1px solid #1e1e1e; }
+  td { padding: 7px 10px; border-bottom: 1px solid #161616; vertical-align: top; }
+  td:first-child { color: #a3e635; font-family: monospace; white-space: nowrap; }
+  td:nth-child(2) { color: #60a5fa; font-family: monospace; }
+  .req { color: #f87171; font-size: 11px; }
+  .opt { color: #555; font-size: 11px; }
+
+  /* 代码块 */
+  pre { background: #0a0a0a; border: 1px solid #1e1e1e; border-radius: 8px; padding: 16px 18px; overflow-x: auto; font-size: 13px; line-height: 1.6; margin-bottom: 14px; }
+  code { font-family: 'Fira Code', 'Cascadia Code', monospace; color: #e2e8f0; }
+  .c  { color: #555; } /* comment */
+  .k  { color: #c084fc; } /* keyword */
+  .s  { color: #86efac; } /* string */
+  .n  { color: #7dd3fc; } /* number */
+  .f  { color: #fbbf24; } /* function */
+  .v  { color: #e2e8f0; } /* variable */
+
+  /* 提示框 */
+  .tip { background: #1a2e1a; border-left: 3px solid #4ade80; border-radius: 0 6px 6px 0; padding: 12px 16px; margin-bottom: 16px; font-size: 13px; color: #9ca3af; }
+  .warn { background: #2a1a1a; border-left: 3px solid #f87171; border-radius: 0 6px 6px 0; padding: 12px 16px; margin-bottom: 16px; font-size: 13px; color: #9ca3af; }
+
+  /* 模型表 */
+  .model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .model-card { background: #111; border: 1px solid #1e1e1e; border-radius: 8px; padding: 14px 16px; }
+  .model-card .name { font-family: monospace; color: #a3e635; font-size: 13px; margin-bottom: 4px; }
+  .model-card .price { color: #facc15; font-size: 14px; font-weight: bold; }
+  .model-card .type { font-size: 12px; color: #555; }
+
+  /* 状态说明 */
+  .status-list { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+  .status-item { background: #111; border: 1px solid #1e1e1e; border-radius: 6px; padding: 6px 14px; font-size: 12px; font-family: monospace; }
+  .s-pending    { color: #facc15; }
+  .s-processing { color: #60a5fa; }
+  .s-success    { color: #4ade80; }
+  .s-failed     { color: #f87171; }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<!-- 侧边栏 -->
+<nav class="sidebar">
+  <div class="logo">Kewen <span>AI</span> API</div>
+  <ul>
+    <li class="section-title">入门</li>
+    <li><a href="#quickstart">快速开始</a></li>
+    <li><a href="#auth">鉴权</a></li>
+    <li><a href="#models">模型与定价</a></li>
+    <li class="section-title">接口</li>
+    <li><a href="#generate">提交生成任务</a></li>
+    <li><a href="#poll">查询任务状态</a></li>
+    <li><a href="#tasks">任务列表</a></li>
+    <li class="section-title">示例</li>
+    <li><a href="#example-python">Python</a></li>
+    <li><a href="#example-curl">cURL</a></li>
+  </ul>
+</nav>
+
+<!-- 主体 -->
+<div class="main">
+  <h1>API 文档</h1>
+  <p>通过 REST API 调用 Kewen AI 图像生成能力，支持程序化集成到你的应用或工作流中。</p>
+  <p>Base URL：<code style="color:#a3e635">https://api.kewenai.shop</code></p>
+
+  <!-- 快速开始 -->
+  <h2 id="quickstart">快速开始</h2>
+  <div class="tip">联系管理员获取 API Key，充值余额后即可调用。</div>
+  <p>调用流程：<strong style="color:#fff">① 提交任务</strong> → <strong style="color:#fff">② 轮询状态</strong> → <strong style="color:#fff">③ 获取结果图</strong></p>
+  <p>任务为异步处理，提交后通常在 10~60 秒内完成，请以 2~5 秒间隔轮询状态。</p>
+
+  <!-- 鉴权 -->
+  <h2 id="auth">鉴权</h2>
+  <p>所有接口需在请求头携带 API Key：</p>
+  <pre><code>Authorization: Bearer sk-xxxxxxxxxxxxxxxxxxxxxxxx</code></pre>
+  <div class="warn">API Key 与账户余额绑定，请勿泄露。如有泄露，联系管理员立即禁用。</div>
+
+  <!-- 模型 -->
+  <h2 id="models">模型与定价</h2>
+  <div class="model-grid">
+    <div class="model-card">
+      <div class="name">nano-banana-2</div>
+      <div class="price">¥ 0.05 / 次</div>
+      <div class="type">图像生成 · 标准版</div>
+    </div>
+    <div class="model-card">
+      <div class="name">nano-banana-pro</div>
+      <div class="price">¥ 0.06 / 次</div>
+      <div class="type">图像生成 · 专业版</div>
+    </div>
+    <div class="model-card">
+      <div class="name">grok-video</div>
+      <div class="price">¥ 1.00 / 次</div>
+      <div class="type">视频生成</div>
+    </div>
+    <div class="model-card">
+      <div class="name">veo-3-fast</div>
+      <div class="price">¥ 2.00 / 次</div>
+      <div class="type">视频生成 · 高质量</div>
+    </div>
+  </div>
+  <p>余额不足时提交任务会返回 <code>402</code> 错误，任务失败会自动退款。</p>
+
+  <!-- 提交生成 -->
+  <h2 id="generate">提交生成任务</h2>
+  <div class="endpoint">
+    <div class="endpoint-title">
+      <span class="badge post">POST</span>
+      <span class="path">/v1/generate</span>
+    </div>
+    <div class="desc">提交一个图像或视频生成任务，立即返回 task_id，结果异步生成。</div>
+
+    <h3>请求体（JSON）</h3>
+    <table>
+      <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+      <tr><td>model</td><td>string</td><td>模型名称，默认 <code>nano-banana-2</code> <span class="opt">选填</span></td></tr>
+      <tr><td>prompt</td><td>string</td><td>生成提示词 <span class="opt">选填</span></td></tr>
+      <tr><td>product_image_url</td><td>string</td><td>参考图 URL <span class="opt">选填</span></td></tr>
+      <tr><td>product_image_urls</td><td>array</td><td>多张参考图 URL（最多5张） <span class="opt">选填</span></td></tr>
+      <tr><td>aspect_ratio</td><td>string</td><td>宽高比：<code>1:1</code> <code>16:9</code> <code>9:16</code> <code>3:4</code> <code>4:3</code>，默认 <code>1:1</code> <span class="opt">选填</span></td></tr>
+      <tr><td>resolution</td><td>string</td><td>分辨率：<code>1K</code> <code>2K</code> <code>4K</code>，默认 <code>1K</code> <span class="opt">选填</span></td></tr>
+      <tr><td>output_format</td><td>string</td><td>输出格式：<code>PNG</code> 或 <code>JPEG</code>，默认 <code>PNG</code> <span class="opt">选填</span></td></tr>
+    </table>
+
+    <h3>响应（200）</h3>
+    <pre><code>{
+  <span class="s">"task_id"</span>: <span class="s">"550e8400-e29b-41d4-a716-446655440000"</span>,
+  <span class="s">"status"</span>: <span class="s">"pending"</span>,
+  <span class="s">"model"</span>: <span class="s">"nano-banana-2"</span>,
+  <span class="s">"task_type"</span>: <span class="s">"image"</span>,
+  <span class="s">"cost"</span>: <span class="n">0.05</span>,
+  <span class="s">"created_at"</span>: <span class="s">"2026-01-01T12:00:00"</span>
+}</code></pre>
+  </div>
+
+  <!-- 查询状态 -->
+  <h2 id="poll">查询任务状态</h2>
+  <div class="endpoint">
+    <div class="endpoint-title">
+      <span class="badge get">GET</span>
+      <span class="path">/v1/tasks/{task_id}</span>
+    </div>
+    <div class="desc">轮询任务状态，建议间隔 2~5 秒，直到 status 为 success 或 failed。</div>
+
+    <h3>任务状态</h3>
+    <div class="status-list">
+      <div class="status-item s-pending">pending — 排队等待</div>
+      <div class="status-item s-processing">processing — 生成中</div>
+      <div class="status-item s-success">success — 完成</div>
+      <div class="status-item s-failed">failed — 失败（已退款）</div>
+    </div>
+
+    <h3>响应（200）</h3>
+    <pre><code>{
+  <span class="s">"task_id"</span>: <span class="s">"550e8400-e29b-41d4-a716-446655440000"</span>,
+  <span class="s">"status"</span>: <span class="s">"success"</span>,
+  <span class="s">"model"</span>: <span class="s">"nano-banana-2"</span>,
+  <span class="s">"task_type"</span>: <span class="s">"image"</span>,
+  <span class="s">"cost"</span>: <span class="n">0.05</span>,
+  <span class="s">"result_image_url"</span>: <span class="s">"https://..."</span>,  <span class="c">// status=success 时有值</span>
+  <span class="s">"error_msg"</span>: <span class="k">null</span>,
+  <span class="s">"created_at"</span>: <span class="s">"2026-01-01T12:00:00"</span>,
+  <span class="s">"updated_at"</span>: <span class="s">"2026-01-01T12:00:35"</span>,
+  <span class="s">"duration_seconds"</span>: <span class="n">35</span>
+}</code></pre>
+  </div>
+
+  <!-- 任务列表 -->
+  <h2 id="tasks">任务列表</h2>
+  <div class="endpoint">
+    <div class="endpoint-title">
+      <span class="badge get">GET</span>
+      <span class="path">/v1/tasks?limit=50</span>
+    </div>
+    <div class="desc">获取最近 7 天的任务记录，最多返回 100 条。</div>
+    <table>
+      <tr><th>参数</th><th>类型</th><th>说明</th></tr>
+      <tr><td>limit</td><td>int</td><td>返回数量，默认 50，最大 100 <span class="opt">选填</span></td></tr>
+    </table>
+  </div>
+
+  <!-- Python 示例 -->
+  <h2 id="example-python">Python 示例</h2>
+  <pre><code><span class="k">import</span> <span class="v">time</span>, <span class="v">requests</span>
+
+API_BASE = <span class="s">"https://api.kewenai.shop"</span>
+API_KEY  = <span class="s">"sk-your-api-key-here"</span>
+HEADERS  = {<span class="s">"Authorization"</span>: <span class="s">f"Bearer {API_KEY}"</span>}
+
+<span class="c"># 1. 提交任务</span>
+resp = requests.<span class="f">post</span>(
+    <span class="s">f"{API_BASE}/v1/generate"</span>,
+    headers=HEADERS,
+    json={
+        <span class="s">"model"</span>: <span class="s">"nano-banana-2"</span>,
+        <span class="s">"prompt"</span>: <span class="s">"一款白色运动鞋，纯白背景，产品展示图"</span>,
+        <span class="s">"aspect_ratio"</span>: <span class="s">"1:1"</span>,
+        <span class="s">"resolution"</span>: <span class="s">"1K"</span>,
+    }
+)
+task_id = resp.json()[<span class="s">"task_id"</span>]
+<span class="f">print</span>(<span class="s">f"任务已提交：{task_id}"</span>)
+
+<span class="c"># 2. 轮询状态</span>
+<span class="k">while True</span>:
+    r = requests.<span class="f">get</span>(<span class="s">f"{API_BASE}/v1/tasks/{task_id}"</span>, headers=HEADERS)
+    data = r.<span class="f">json</span>()
+    status = data[<span class="s">"status"</span>]
+    <span class="f">print</span>(<span class="s">f"状态：{status}"</span>)
+    <span class="k">if</span> status == <span class="s">"success"</span>:
+        <span class="f">print</span>(<span class="s">f"结果图：{data['result_image_url']}"</span>)
+        <span class="k">break</span>
+    <span class="k">elif</span> status == <span class="s">"failed"</span>:
+        <span class="f">print</span>(<span class="s">f"生成失败：{data['error_msg']}"</span>)
+        <span class="k">break</span>
+    time.<span class="f">sleep</span>(<span class="n">3</span>)</code></pre>
+
+  <!-- cURL 示例 -->
+  <h2 id="example-curl">cURL 示例</h2>
+  <pre><code><span class="c"># 提交任务</span>
+curl -X POST https://api.kewenai.shop/v1/generate \
+  -H <span class="s">"Authorization: Bearer sk-your-api-key"</span> \
+  -H <span class="s">"Content-Type: application/json"</span> \
+  -d <span class="s">'{"model":"nano-banana-2","prompt":"产品展示图"}'</span>
+
+<span class="c"># 查询状态（替换 task_id）</span>
+curl https://api.kewenai.shop/v1/tasks/&lt;task_id&gt; \
+  -H <span class="s">"Authorization: Bearer sk-your-api-key"</span></code></pre>
+
+  <div class="tip">如有接入问题，请联系管理员获取支持。</div>
+</div>
+</div>
+</body>
+</html>

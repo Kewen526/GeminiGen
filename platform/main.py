@@ -125,5 +125,11 @@ def admin_panel():
     return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
 
 
+@app.get("/api-docs", response_class=HTMLResponse, include_in_schema=False)
+def api_docs():
+    html_path = Path(__file__).resolve().parent.parent / "api_docs.html"
+    return HTMLResponse(content=html_path.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     uvicorn.run("platform.main:app", host=HOST, port=PORT, reload=False)

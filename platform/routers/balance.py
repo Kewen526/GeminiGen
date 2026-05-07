@@ -97,6 +97,28 @@ def admin_get_transactions(
     ]
 
 
+# ── 管理员查用户 API Keys ─────────────────────────────────────
+@router.get("/admin/api-keys")
+def admin_get_api_keys(
+    user_id: int,
+    _admin: dict = Depends(require_admin),
+):
+    def _fmt(dt) -> str:
+        return dt.isoformat() if hasattr(dt, "isoformat") else str(dt) if dt else None
+    rows = db.get_api_keys(user_id)
+    return [
+        {
+            "id": r["id"],
+            "key_name": r["key_name"],
+            "key_value": r["key_value"],
+            "total_calls": r["total_calls"],
+            "last_used_at": _fmt(r["last_used_at"]),
+            "created_at": _fmt(r["created_at"]),
+        }
+        for r in rows
+    ]
+
+
 # ── 管理员创建 API Key ────────────────────────────────────────
 @router.post("/admin/create-api-key")
 def admin_create_api_key(
