@@ -104,3 +104,6 @@ ALTER TABLE gen_tasks ADD COLUMN task_type VARCHAR(10) NOT NULL DEFAULT 'image' 
 ALTER TABLE gen_tasks ADD COLUMN result_video_url VARCHAR(1000) AFTER result_image_url;
 ALTER TABLE gen_tasks ADD COLUMN video_duration INT DEFAULT NULL AFTER result_video_url;
 ALTER TABLE gen_tasks ADD COLUMN video_mode_image VARCHAR(20) DEFAULT NULL AFTER video_duration;
+
+-- 迁移：gen_tasks 新增 source 字段（web=前端, api=API Key 调用）
+ALTER TABLE gen_tasks ADD COLUMN source VARCHAR(10) NOT NULL DEFAULT 'web' AFTER api_key_id;

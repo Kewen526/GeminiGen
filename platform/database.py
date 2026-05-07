@@ -348,18 +348,19 @@ def create_task(user_id: int, model: str, product_image_url: str,
                 output_format: str = "PNG",
                 task_type: str = "image",
                 video_duration: Optional[int] = None,
-                video_mode_image: Optional[str] = None) -> str:
+                video_mode_image: Optional[str] = None,
+                source: str = "web") -> str:
     task_id = str(uuid.uuid4())
     conn = get_conn()
     try:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO gen_tasks "
-                "(task_id, user_id, api_key_id, model, task_type, product_image_url, "
+                "(task_id, user_id, api_key_id, source, model, task_type, product_image_url, "
                 " scene_image_url, prompt_text, cost, status, "
                 " aspect_ratio, resolution, output_format, video_duration, video_mode_image) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)",
-                (task_id, user_id, api_key_id, model, task_type,
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s, %s)",
+                (task_id, user_id, api_key_id, source, model, task_type,
                  product_image_url, scene_image_url, prompt_text, cost,
                  aspect_ratio, resolution, output_format,
                  video_duration, video_mode_image),
@@ -474,5 +475,74 @@ def fail_task(task_id: str, error_msg: str, refund: bool = True) -> None:
                         (row["user_id"], row["cost"], task_id, "任务失败自动退款"),
                     )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ============================================================
+# 管理员统计
+# ============================================================
+def admin_create_api_key(user_id: int, key_name: str) -> dict:
+    return create_api_key(user_id, key_name)
+
+
+def admin_stats_overview() -> dict:
+    """今日注册数、今日充值金额、今日消耗金额、总用户数"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) AS total_users, "
+                "SUM(CASE WHEN DATE(created_at)=CURDATE() THEN 1 ELSE 0 END) AS today_new "
+                "FROM platform_users"
+            )
+            users = cur.fetchone()
+            cur.execute(
+                "SELECT "
+                "COALESCE(SUM(CASE WHEN type='recharge' AND DATE(created_at)=CURDATE() THEN amount ELSE 0 END),0) AS today_recharge, "
+                "COALESCE(SUM(CASE WHEN type='deduct'   AND DATE(created_at)=CURDATE() THEN ABS(amount) ELSE 0 END),0) AS today_spend, "
+                "COALESCE(SUM(CASE WHEN type='recharge' THEN amount ELSE 0 END),0) AS total_recharge "
+                "FROM balance_transactions"
+            )
+            tx = cur.fetchone()
+            cur.execute(
+                "SELECT COUNT(*) AS today_tasks, "
+                "SUM(CASE WHEN source='api' THEN 1 ELSE 0 END) AS today_api_tasks, "
+                "SUM(CASE WHEN source='web' THEN 1 ELSE 0 END) AS today_web_tasks "
+                "FROM gen_tasks WHERE DATE(created_at)=CURDATE()"
+            )
+            tasks = cur.fetchone()
+        return {
+            "total_users":      int(users["total_users"]),
+            "today_new":        int(users["today_new"] or 0),
+            "today_recharge":   float(tx["today_recharge"]),
+            "today_spend":      float(tx["today_spend"]),
+            "total_recharge":   float(tx["total_recharge"]),
+            "today_tasks":      int(tasks["today_tasks"] or 0),
+            "today_api_tasks":  int(tasks["today_api_tasks"] or 0),
+            "today_web_tasks":  int(tasks["today_web_tasks"] or 0),
+        }
+    finally:
+        conn.close()
+
+
+def admin_user_stats(limit: int = 50) -> list:
+    """各用户消耗统计（按总消耗排序）"""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT pu.id, pu.email, pu.username, pu.balance, pu.created_at, "
+                "COALESCE(SUM(CASE WHEN bt.type='deduct' THEN ABS(bt.amount) ELSE 0 END),0) AS total_spend, "
+                "COALESCE(SUM(CASE WHEN bt.type='recharge' THEN bt.amount ELSE 0 END),0) AS total_recharge, "
+                "COALESCE(SUM(CASE WHEN gt.source='api' AND gt.status='success' THEN 1 ELSE 0 END),0) AS api_tasks, "
+                "COALESCE(SUM(CASE WHEN gt.source='web' AND gt.status='success' THEN 1 ELSE 0 END),0) AS web_tasks "
+                "FROM platform_users pu "
+                "LEFT JOIN balance_transactions bt ON bt.user_id = pu.id "
+                "LEFT JOIN gen_tasks gt ON gt.user_id = pu.id "
+                "GROUP BY pu.id ORDER BY total_spend DESC LIMIT %s",
+                (limit,),
+            )
+            return cur.fetchall()
     finally:
         conn.close()

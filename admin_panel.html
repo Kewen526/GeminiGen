@@ -6,70 +6,157 @@
 <title>管理后台</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #0f0f0f; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  body { background: #0f0f0f; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; min-height: 100vh; }
+  .center { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
   .card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 40px; width: 420px; }
   h2 { font-size: 18px; color: #fff; margin-bottom: 28px; text-align: center; }
+  h3 { font-size: 14px; color: #aaa; margin-bottom: 14px; }
   label { font-size: 13px; color: #888; display: block; margin-bottom: 6px; }
   input { width: 100%; background: #111; border: 1px solid #333; border-radius: 8px; padding: 10px 14px; color: #fff; font-size: 14px; outline: none; margin-bottom: 16px; }
   input:focus { border-color: #555; }
-  button { width: 100%; background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 12px; font-size: 14px; cursor: pointer; }
+  button { background: #2563eb; color: #fff; border: none; border-radius: 8px; padding: 10px 16px; font-size: 14px; cursor: pointer; }
   button:hover { background: #1d4ed8; }
+  button.full { width: 100%; padding: 12px; }
+  button.sm { padding: 7px 14px; font-size: 13px; }
+  button.green { background: #16a34a; }
+  button.green:hover { background: #15803d; }
+  button.gray { background: #333; }
+  button.gray:hover { background: #444; }
   .msg { margin-top: 14px; font-size: 13px; text-align: center; min-height: 20px; }
   .ok { color: #4ade80; }
   .err { color: #f87171; }
   .hidden { display: none; }
-  .row { display: flex; gap: 10px; }
+  .row { display: flex; gap: 10px; align-items: flex-start; }
   .row input { margin-bottom: 0; }
   .sep { border-top: 1px solid #2a2a2a; margin: 24px 0; }
-  .balance-tag { font-size: 12px; color: #888; text-align: right; margin-bottom: 16px; }
+  .balance-tag { font-size: 12px; color: #888; margin-bottom: 16px; }
   .balance-tag span { color: #facc15; font-weight: bold; }
-  table { width: 100%; font-size: 12px; border-collapse: collapse; margin-top: 16px; }
-  th { color: #666; font-weight: normal; padding: 6px 4px; text-align: left; border-bottom: 1px solid #222; }
-  td { padding: 6px 4px; border-bottom: 1px solid #1e1e1e; }
+
+  /* 导航 */
+  .nav { background: #111; border-bottom: 1px solid #222; padding: 0 24px; display: flex; gap: 4px; }
+  .nav-btn { background: none; border: none; color: #888; padding: 14px 18px; font-size: 14px; border-bottom: 2px solid transparent; border-radius: 0; cursor: pointer; }
+  .nav-btn:hover { color: #fff; background: none; }
+  .nav-btn.active { color: #fff; border-bottom-color: #2563eb; }
+  .content { padding: 28px; max-width: 1000px; margin: 0 auto; }
+
+  /* 统计卡片 */
+  .stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 14px; margin-bottom: 28px; }
+  .stat-card { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 18px; }
+  .stat-card .label { font-size: 12px; color: #666; margin-bottom: 8px; }
+  .stat-card .value { font-size: 24px; color: #fff; font-weight: bold; }
+  .stat-card .sub { font-size: 11px; color: #555; margin-top: 4px; }
+
+  /* 表格 */
+  table { width: 100%; font-size: 12px; border-collapse: collapse; }
+  th { color: #555; font-weight: normal; padding: 8px 10px; text-align: left; border-bottom: 1px solid #222; white-space: nowrap; }
+  td { padding: 8px 10px; border-bottom: 1px solid #1a1a1a; vertical-align: middle; }
+  tr:hover td { background: #1c1c1c; }
   .plus { color: #4ade80; }
   .minus { color: #f87171; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+  .tag-api { background: #1e3a5f; color: #60a5fa; }
+  .tag-web { background: #1a2e1a; color: #4ade80; }
+
+  /* key box */
+  .key-box { background: #111; border: 1px solid #333; border-radius: 6px; padding: 8px 12px; font-family: monospace; font-size: 12px; color: #a3e635; word-break: break-all; margin-top: 10px; }
+
+  /* 充值面板 */
+  .panel { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 10px; padding: 24px; margin-bottom: 20px; }
 </style>
 </head>
 <body>
 
 <!-- 登录面板 -->
-<div class="card" id="loginPanel">
-  <h2>管理后台</h2>
-  <label>邮箱</label>
-  <input type="text" id="loginUser" placeholder="管理员邮箱">
-  <label>密码</label>
-  <input type="password" id="loginPass" placeholder="密码">
-  <button onclick="doLogin()">登录</button>
-  <div class="msg" id="loginMsg"></div>
+<div class="center" id="loginWrap">
+  <div class="card">
+    <h2>管理后台</h2>
+    <label>邮箱</label>
+    <input type="text" id="loginUser" placeholder="管理员邮箱">
+    <label>密码</label>
+    <input type="password" id="loginPass" placeholder="密码">
+    <button class="full" onclick="doLogin()">登录</button>
+    <div class="msg" id="loginMsg"></div>
+  </div>
 </div>
 
-<!-- 充值面板 -->
-<div class="card hidden" id="rechargePanel">
-  <h2>余额管理</h2>
-
-  <label>查询用户余额</label>
-  <div class="row" style="margin-bottom:16px">
-    <input type="text" id="queryEmail" placeholder="用户邮箱" style="margin-bottom:0">
-    <button style="width:90px" onclick="queryUser()">查询</button>
+<!-- 主面板 -->
+<div id="mainWrap" class="hidden">
+  <div class="nav">
+    <button class="nav-btn active" onclick="showTab('stats', this)">数据概览</button>
+    <button class="nav-btn" onclick="showTab('users', this)">用户列表</button>
+    <button class="nav-btn" onclick="showTab('recharge', this)">充值管理</button>
   </div>
 
-  <div id="userInfo" class="hidden">
-    <div class="balance-tag">当前余额：<span id="userBalance">-</span> 元 &nbsp;|&nbsp; 用户ID：<span id="userId">-</span></div>
+  <!-- 数据概览 -->
+  <div class="content" id="tab-stats">
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card"><div class="label">总用户数</div><div class="value" id="s-total">-</div></div>
+      <div class="stat-card"><div class="label">今日新增</div><div class="value" id="s-new">-</div></div>
+      <div class="stat-card"><div class="label">今日充值</div><div class="value" id="s-recharge">-</div><div class="sub">元</div></div>
+      <div class="stat-card"><div class="label">今日消耗</div><div class="value" id="s-spend">-</div><div class="sub">元</div></div>
+      <div class="stat-card"><div class="label">今日任务</div><div class="value" id="s-tasks">-</div><div class="sub" id="s-tasks-sub">-</div></div>
+      <div class="stat-card"><div class="label">累计充值</div><div class="value" id="s-total-recharge">-</div><div class="sub">元</div></div>
+    </div>
+    <button class="sm gray" onclick="loadStats()">刷新</button>
+  </div>
 
-    <div class="sep"></div>
-    <label>充值金额（元）</label>
-    <input type="number" id="rechargeAmount" placeholder="例如 100" min="0.01" step="0.01">
-    <label>备注（选填）</label>
-    <input type="text" id="rechargeNote" placeholder="充值备注">
-    <button onclick="doRecharge()">确认充值</button>
-    <div class="msg" id="rechargeMsg"></div>
-
-    <div class="sep"></div>
-    <label>最近流水</label>
+  <!-- 用户列表 -->
+  <div class="content hidden" id="tab-users">
+    <button class="sm gray" onclick="loadUserStats()" style="margin-bottom:16px">刷新</button>
     <table>
-      <tr><th>时间</th><th>类型</th><th>金额</th><th>备注</th></tr>
-      <tbody id="txList"></tbody>
+      <thead><tr>
+        <th>ID</th><th>邮箱</th><th>余额(元)</th>
+        <th>累计消耗</th><th>累计充值</th>
+        <th>前端任务</th><th>API任务</th><th>注册时间</th>
+      </tr></thead>
+      <tbody id="userStatsBody"></tbody>
     </table>
+  </div>
+
+  <!-- 充值管理 -->
+  <div class="content hidden" id="tab-recharge">
+    <div class="panel">
+      <h3>查询用户</h3>
+      <div class="row" style="margin-bottom:16px">
+        <input type="text" id="queryEmail" placeholder="用户邮箱" style="margin-bottom:0">
+        <button class="sm" onclick="queryUser()">查询</button>
+      </div>
+
+      <div id="userInfo" class="hidden">
+        <div class="balance-tag">
+          当前余额：<span id="userBalance">-</span> 元 &nbsp;|&nbsp;
+          用户ID：<span id="userId">-</span> &nbsp;|&nbsp;
+          用户名：<span id="userName">-</span>
+        </div>
+
+        <div class="sep"></div>
+        <h3>充值</h3>
+        <div class="row" style="margin-bottom:12px">
+          <input type="number" id="rechargeAmount" placeholder="金额（元）" min="0.01" step="0.01" style="margin-bottom:0">
+          <input type="text" id="rechargeNote" placeholder="备注（选填）" style="margin-bottom:0">
+          <button class="sm green" onclick="doRecharge()">充值</button>
+        </div>
+        <div class="msg" id="rechargeMsg"></div>
+
+        <div class="sep"></div>
+        <h3>API Key 管理</h3>
+        <div class="row" style="margin-bottom:12px">
+          <input type="text" id="keyName" placeholder="Key 名称（选填）" style="margin-bottom:0">
+          <button class="sm" onclick="doCreateKey()">生成 Key</button>
+        </div>
+        <div id="newKeyBox" class="hidden">
+          <div class="key-box" id="newKeyValue"></div>
+          <div style="font-size:12px;color:#666;margin-top:6px">请立即复制，关闭后不再显示</div>
+        </div>
+
+        <div class="sep"></div>
+        <h3>最近流水</h3>
+        <table>
+          <thead><tr><th>时间</th><th>类型</th><th>金额</th><th>备注</th></tr></thead>
+          <tbody id="txList"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -77,6 +164,17 @@
 const API = 'https://api.kewenai.shop';
 let TOKEN = '';
 let CURRENT_USER_ID = null;
+
+function showTab(name, btn) {
+  ['stats','users','recharge'].forEach(t => {
+    document.getElementById('tab-'+t).classList.add('hidden');
+  });
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.remove('hidden');
+  btn.classList.add('active');
+  if (name === 'stats') loadStats();
+  if (name === 'users') loadUserStats();
+}
 
 async function doLogin() {
   const user = document.getElementById('loginUser').value.trim();
@@ -93,12 +191,48 @@ async function doLogin() {
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || '登录失败');
     TOKEN = d.access_token;
-    document.getElementById('loginPanel').classList.add('hidden');
-    document.getElementById('rechargePanel').classList.remove('hidden');
+    document.getElementById('loginWrap').classList.add('hidden');
+    document.getElementById('mainWrap').classList.remove('hidden');
+    loadStats();
   } catch(e) {
     msg.textContent = e.message;
     msg.className = 'msg err';
   }
+}
+
+async function loadStats() {
+  try {
+    const r = await fetch(`${API}/v1/admin/stats/overview`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    const d = await r.json();
+    document.getElementById('s-total').textContent = d.total_users;
+    document.getElementById('s-new').textContent = d.today_new;
+    document.getElementById('s-recharge').textContent = d.today_recharge.toFixed(2);
+    document.getElementById('s-spend').textContent = d.today_spend.toFixed(2);
+    document.getElementById('s-tasks').textContent = d.today_tasks;
+    document.getElementById('s-tasks-sub').textContent = `前端 ${d.today_web_tasks} / API ${d.today_api_tasks}`;
+    document.getElementById('s-total-recharge').textContent = d.total_recharge.toFixed(2);
+  } catch(e) { console.error(e); }
+}
+
+async function loadUserStats() {
+  try {
+    const r = await fetch(`${API}/v1/admin/stats/users?limit=100`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    const list = await r.json();
+    const tbody = document.getElementById('userStatsBody');
+    tbody.innerHTML = list.map(u => {
+      const dt = new Date(u.created_at).toLocaleDateString('zh-CN');
+      return `<tr>
+        <td>${u.id}</td>
+        <td>${u.email}</td>
+        <td class="plus">${u.balance.toFixed(2)}</td>
+        <td class="minus">${u.total_spend.toFixed(2)}</td>
+        <td class="plus">${u.total_recharge.toFixed(2)}</td>
+        <td><span class="tag tag-web">${u.web_tasks}</span></td>
+        <td><span class="tag tag-api">${u.api_tasks}</span></td>
+        <td>${dt}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) { console.error(e); }
 }
 
 async function queryUser() {
@@ -113,12 +247,12 @@ async function queryUser() {
     CURRENT_USER_ID = d.id;
     document.getElementById('userId').textContent = d.id;
     document.getElementById('userBalance').textContent = parseFloat(d.balance).toFixed(2);
+    document.getElementById('userName').textContent = d.username || '-';
     document.getElementById('userInfo').classList.remove('hidden');
     document.getElementById('rechargeMsg').textContent = '';
+    document.getElementById('newKeyBox').classList.add('hidden');
     loadTx(d.id);
-  } catch(e) {
-    alert(e.message);
-  }
+  } catch(e) { alert(e.message); }
 }
 
 async function loadTx(uid) {
@@ -168,10 +302,24 @@ async function doRecharge() {
   }
 }
 
+async function doCreateKey() {
+  if (!CURRENT_USER_ID) return;
+  const keyName = document.getElementById('keyName').value.trim() || '管理员创建';
+  try {
+    const r = await fetch(`${API}/v1/admin/create-api-key?user_id=${CURRENT_USER_ID}&key_name=${encodeURIComponent(keyName)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${TOKEN}` }
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.detail || '创建失败');
+    document.getElementById('newKeyValue').textContent = d.key_value;
+    document.getElementById('newKeyBox').classList.remove('hidden');
+    document.getElementById('keyName').value = '';
+  } catch(e) { alert(e.message); }
+}
+
 document.addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
-    if (!document.getElementById('loginPanel').classList.contains('hidden')) doLogin();
-  }
+  if (e.key === 'Enter' && !document.getElementById('loginWrap').classList.contains('hidden')) doLogin();
 });
 </script>
 </body>

@@ -93,6 +93,7 @@ def generate(req: GenerateRequest, request: Request, current_user: dict = Depend
         aspect_ratio=req.aspect_ratio or "1:1",
         resolution=req.resolution or "1K",
         output_format=req.output_format or "PNG",
+        source="api" if current_user.get("key_id") else "web",
     )
 
     ok = db.deduct_balance(current_user["id"], cost, task_id, f"生成任务 {model}")
@@ -164,6 +165,7 @@ async def generate_upload(
         aspect_ratio=aspect_ratio,
         resolution=resolution,
         output_format=output_format,
+        source="api" if current_user.get("key_id") else "web",
     )
 
     ok = db.deduct_balance(current_user["id"], cost, task_id, f"生成任务 {model}")

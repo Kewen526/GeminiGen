@@ -95,3 +95,48 @@ def admin_get_transactions(
         }
         for r in rows
     ]
+
+
+# ── 管理员创建 API Key ────────────────────────────────────────
+@router.post("/admin/create-api-key")
+def admin_create_api_key(
+    user_id: int,
+    key_name: str = "管理员创建",
+    _admin: dict = Depends(require_admin),
+):
+    user = db.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    result = db.admin_create_api_key(user_id, key_name)
+    return {"user_id": user_id, "key_name": result["key_name"], "key_value": result["key_value"]}
+
+
+# ── 管理员统计概览 ────────────────────────────────────────────
+@router.get("/admin/stats/overview")
+def admin_stats_overview(_admin: dict = Depends(require_admin)):
+    return db.admin_stats_overview()
+
+
+# ── 管理员用户消耗列表 ────────────────────────────────────────
+@router.get("/admin/stats/users")
+def admin_stats_users(
+    limit: int = 50,
+    _admin: dict = Depends(require_admin),
+):
+    def _fmt(dt) -> str:
+        return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+    rows = db.admin_user_stats(limit=min(limit, 200))
+    return [
+        {
+            "id": r["id"],
+            "email": r["email"],
+            "username": r.get("username"),
+            "balance": float(r["balance"]),
+            "total_spend": float(r["total_spend"]),
+            "total_recharge": float(r["total_recharge"]),
+            "api_tasks": int(r["api_tasks"]),
+            "web_tasks": int(r["web_tasks"]),
+            "created_at": _fmt(r["created_at"]),
+        }
+        for r in rows
+    ]
