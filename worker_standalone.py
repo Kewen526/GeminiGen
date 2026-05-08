@@ -108,123 +108,190 @@ _stop_event = threading.Event()
 # ============================================================
 # 数据库操作
 # ============================================================
-def _get_conn():
+def _new_conn():
     return pymysql.connect(
         host=DB_HOST, port=DB_PORT, user=DB_USER,
         password=DB_PASSWORD, database=DB_NAME,
         charset="utf8mb4",
         cursorclass=pymysql.cursors.DictCursor,
-        connect_timeout=10,
+        connect_timeout=15,
+        read_timeout=30,
+        write_timeout=30,
         autocommit=False,
     )
 
 
+def _get_conn(retries=3):
+    """创建数据库连接，失败时重试"""
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            conn = _new_conn()
+            conn.ping(reconnect=False)
+            return conn
+        except Exception as e:
+            last_err = e
+            if attempt < retries:
+                wait = attempt * 2
+                logger.warning(f"数据库连接失败（第{attempt}次），{wait}s后重试: {e}")
+                time.sleep(wait)
+    raise last_err
+
+
+def _run_with_retry(fn, retries=2):
+    """执行 fn(conn)，遇到连接类错误时重新建连后重试"""
+    last_err = None
+    for attempt in range(1, retries + 1):
+        conn = _get_conn()
+        try:
+            result = fn(conn)
+            return result
+        except pymysql.err.OperationalError as e:
+            conn.close()
+            last_err = e
+            if attempt < retries:
+                logger.warning(f"DB 操作重试（第{attempt}次）: {e}")
+                time.sleep(2)
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            conn.close()
+            raise
+        else:
+            conn.close()
+    raise last_err
+
+
 def claim_pending_task():
     """原子性取一条 pending 任务，标记为 processing（多 Worker 安全）"""
-    conn = _get_conn()
-    try:
-        conn.begin()
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM gen_tasks "
-                "WHERE status = 'pending' "
-                "ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
-            )
-            row = cur.fetchone()
-            if row:
+    def _do(conn):
+        try:
+            conn.begin()
+            with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE gen_tasks SET status = 'processing', updated_at = NOW() "
-                    "WHERE task_id = %s",
-                    (row["task_id"],),
+                    "SELECT * FROM gen_tasks "
+                    "WHERE status = 'pending' "
+                    "ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED"
                 )
-                conn.commit()
-            else:
-                conn.rollback()
-            return row
+                row = cur.fetchone()
+                if row:
+                    cur.execute(
+                        "UPDATE gen_tasks SET status = 'processing', updated_at = NOW() "
+                        "WHERE task_id = %s",
+                        (row["task_id"],),
+                    )
+                    conn.commit()
+                else:
+                    conn.rollback()
+                return row
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    try:
+        return _run_with_retry(_do)
     except Exception as e:
-        conn.rollback()
         logger.error(f"claim_pending_task 异常: {e}")
         return None
-    finally:
-        conn.close()
 
 
 def finish_task(task_id, result_url, is_video=False):
     url_col = "result_video_url" if is_video else "result_image_url"
-    conn = _get_conn()
+
+    def _do(conn):
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE gen_tasks SET status = 'success', {url_col} = %s, "
+                    "updated_at = NOW() WHERE task_id = %s",
+                    (result_url, task_id),
+                )
+                cur.execute(
+                    "UPDATE platform_users pu "
+                    "JOIN gen_tasks gt ON pu.id = gt.user_id "
+                    "SET pu.total_tasks = pu.total_tasks + 1 "
+                    "WHERE gt.task_id = %s",
+                    (task_id,),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                f"UPDATE gen_tasks SET status = 'success', {url_col} = %s, "
-                "updated_at = NOW() WHERE task_id = %s",
-                (result_url, task_id),
-            )
-            cur.execute(
-                "UPDATE platform_users pu "
-                "JOIN gen_tasks gt ON pu.id = gt.user_id "
-                "SET pu.total_tasks = pu.total_tasks + 1 "
-                "WHERE gt.task_id = %s",
-                (task_id,),
-            )
-        conn.commit()
+        _run_with_retry(_do)
     except Exception as e:
         logger.error(f"finish_task 异常: {e}")
-        conn.rollback()
-    finally:
-        conn.close()
 
 
 def fail_task(task_id, error_msg, refund=True):
-    conn = _get_conn()
+    def _do(conn):
+        try:
+            conn.begin()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT user_id, cost FROM gen_tasks WHERE task_id = %s",
+                    (task_id,),
+                )
+                row = cur.fetchone()
+                cur.execute(
+                    "UPDATE gen_tasks SET status = 'failed', error_msg = %s, "
+                    "updated_at = NOW() WHERE task_id = %s",
+                    (error_msg[:500], task_id),
+                )
+                if refund and row and row.get("cost"):
+                    cur.execute(
+                        "UPDATE platform_users SET balance = balance + %s WHERE id = %s",
+                        (row["cost"], row["user_id"]),
+                    )
+                    cur.execute(
+                        "INSERT INTO balance_transactions "
+                        "(user_id, amount, type, task_id, note) VALUES (%s, %s, 'refund', %s, %s)",
+                        (row["user_id"], row["cost"], task_id, "任务失败自动退款"),
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     try:
-        conn.begin()
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT user_id, cost FROM gen_tasks WHERE task_id = %s",
-                (task_id,),
-            )
-            row = cur.fetchone()
-            cur.execute(
-                "UPDATE gen_tasks SET status = 'failed', error_msg = %s, "
-                "updated_at = NOW() WHERE task_id = %s",
-                (error_msg[:500], task_id),
-            )
-            if refund and row and row.get("cost"):
-                cur.execute(
-                    "UPDATE platform_users SET balance = balance + %s WHERE id = %s",
-                    (row["cost"], row["user_id"]),
-                )
-                cur.execute(
-                    "INSERT INTO balance_transactions "
-                    "(user_id, amount, type, task_id, note) VALUES (%s, %s, 'refund', %s, %s)",
-                    (row["user_id"], row["cost"], task_id, "任务失败自动退款"),
-                )
-        conn.commit()
+        _run_with_retry(_do)
     except Exception as e:
         logger.error(f"fail_task 异常: {e}")
-        conn.rollback()
-    finally:
-        conn.close()
 
 
 def reset_stuck_tasks(timeout_minutes=30):
     """将卡在 processing 状态超过 N 分钟的任务重置为 pending"""
-    conn = _get_conn()
+    def _do(conn):
+        try:
+            with conn.cursor() as cur:
+                affected = cur.execute(
+                    "UPDATE gen_tasks SET status = 'pending', updated_at = NOW() "
+                    "WHERE status = 'processing' "
+                    "AND updated_at < NOW() - INTERVAL %s MINUTE",
+                    (timeout_minutes,),
+                )
+            conn.commit()
+            if affected:
+                logger.info(f"已重置 {affected} 条卡住的 processing 任务")
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     try:
-        with conn.cursor() as cur:
-            affected = cur.execute(
-                "UPDATE gen_tasks SET status = 'pending', updated_at = NOW() "
-                "WHERE status = 'processing' "
-                "AND updated_at < NOW() - INTERVAL %s MINUTE",
-                (timeout_minutes,),
-            )
-        conn.commit()
-        if affected:
-            logger.info(f"已重置 {affected} 条卡住的 processing 任务")
+        _run_with_retry(_do)
     except Exception as e:
         logger.error(f"reset_stuck_tasks 异常: {e}")
-    finally:
-        conn.close()
 
 
 # ============================================================
