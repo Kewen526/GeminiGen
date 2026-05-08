@@ -533,14 +533,24 @@ def admin_user_stats(limit: int = 50) -> list:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT pu.id, pu.email, pu.username, pu.balance, pu.created_at, "
-                "COALESCE(SUM(CASE WHEN bt.type='deduct' THEN ABS(bt.amount) ELSE 0 END),0) AS total_spend, "
-                "COALESCE(SUM(CASE WHEN bt.type='recharge' THEN bt.amount ELSE 0 END),0) AS total_recharge, "
-                "COALESCE(SUM(CASE WHEN gt.source='api' AND gt.status='success' THEN 1 ELSE 0 END),0) AS api_tasks, "
-                "COALESCE(SUM(CASE WHEN gt.source='web' AND gt.status='success' THEN 1 ELSE 0 END),0) AS web_tasks "
+                "COALESCE(tx.total_spend, 0) AS total_spend, "
+                "COALESCE(tx.total_recharge, 0) AS total_recharge, "
+                "COALESCE(gt.api_tasks, 0) AS api_tasks, "
+                "COALESCE(gt.web_tasks, 0) AS web_tasks "
                 "FROM platform_users pu "
-                "LEFT JOIN balance_transactions bt ON bt.user_id = pu.id "
-                "LEFT JOIN gen_tasks gt ON gt.user_id = pu.id "
-                "GROUP BY pu.id ORDER BY total_spend DESC LIMIT %s",
+                "LEFT JOIN ("
+                "  SELECT user_id, "
+                "  SUM(CASE WHEN type='deduct' THEN ABS(amount) ELSE 0 END) AS total_spend, "
+                "  SUM(CASE WHEN type='recharge' THEN amount ELSE 0 END) AS total_recharge "
+                "  FROM balance_transactions GROUP BY user_id"
+                ") tx ON tx.user_id = pu.id "
+                "LEFT JOIN ("
+                "  SELECT user_id, "
+                "  SUM(CASE WHEN source='api' AND status='success' THEN 1 ELSE 0 END) AS api_tasks, "
+                "  SUM(CASE WHEN source='web' AND status='success' THEN 1 ELSE 0 END) AS web_tasks "
+                "  FROM gen_tasks GROUP BY user_id"
+                ") gt ON gt.user_id = pu.id "
+                "ORDER BY total_spend DESC LIMIT %s",
                 (limit,),
             )
             return cur.fetchall()
